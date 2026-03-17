@@ -33,19 +33,16 @@
 [![Badge](https://img.shields.io/badge/DigiHealth-Oulu_University/Infotech-lightblue)](https://www.oulu.fi/en/research/creating-better-health-our-digital-health-knowhow)
 
 ## Motivation
----
 
 The extracellular matrix (ECM) is a complex meshwork of proteins that serves as the master structural organizer of all tissues. Although spatial transcriptomics enables the study of ECM gene expression in its native tissue context, existing computational tools are designed primarily for intracellular expression variability and cell-cell signaling, and thus poorly capture the spatial architecture, regional specialization, and niche-specific deployment of ECM components.
 
 MatriSpace is a computational framework designed to identify, quantify, and interpret spatial expression patterns of matrisome genes, ECM signatures, and ECM-defined niches from spatial transcriptomics data. It focuses on the spatial organization, co-localization, and regional coordination of matrisome components, as well as their relationships with non-matrisome genes across entire tissue sections.
 
 ## Graphical Abstract
----
 
 [placeholder]
 
 ## Workflow
----
 
 MatriSpace operates through three analytical stages: **Data Input**, **Matrisome Profiling**, and **Feature Analysis**.
 
@@ -72,7 +69,6 @@ Users may interrogate specific features using a two-level selection system. The 
 All results are exportable as plots and tables, and processed Seurat objects can be downloaded for further analysis.
 
 ## Installation
----
 
 MatriSpace is distributed as an R package and a Docker image. The offline version supports user-uploaded data only; the pre-processed dataset collection is available exclusively through the [online version](http://matrinet.shinyapps.io/matrispace).
 
@@ -106,7 +102,6 @@ matrispace.app::run_app()
 ```
 
 ## See Also
----
 
 * [The Matrisome Project](https://sites.google.com/uic.edu/matrisome/home): an open-access resource sharing protocols, tools, and datasets to support ECM research.
 * [MatriCom](https://github.com/Izzilab/MatriCom) and [MatriComDB](https://github.com/Izzilab/MatriCom): a tool and curated database for inferring ECM communication systems from scRNA-seq data.
