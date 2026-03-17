@@ -77,8 +77,8 @@ MatriSpace is distributed as an R package and a Docker image. The offline versio
 The Docker image bundles all dependencies and guarantees a reproducible environment:
 
 ```bash
-docker pull ghcr.io/ayomidesci/matrispace-app:latest
-docker run -p 3838:3838 ghcr.io/ayomidesci/matrispace-app:latest
+docker pull ghcr.io/theayomideo/matrispace-app:main
+docker run -p 3838:3838 ghcr.io/theayomideo/matrispace-app:main
 ```
 
 Then open http://localhost:3838 in your browser.
