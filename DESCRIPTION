@@ -73,4 +73,10 @@ Imports:
     knitr,
     tidyr,
     methods
+Remotes:
+    dreamRs/capture,
+    JohnCoene/echarts4r,
+    Theayomideo/MERINGUE,
+    samuel-marsh/scCustomize,
+    ludvigla/semla
 RoxygenNote: 7.3.2
