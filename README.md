@@ -1,6 +1,6 @@
 # MatriSpace: Identification and visualization of spatially-resolved ECM gene expression patterns in health and disease
 
-[Ayomide Oshinjo](https://orcid.org/0000-0003-4303-0181) 1, Daiqing Chen 2, [Petar B. Petrov](https://orcid.org/0000-0001-5551-8032) 1,3, [Valerio Izzi](https://orcid.org/0000-0002-9960-4917) 1,3\*, [Alexandra Naba](https://orcid.org/0000-0002-4796-5614) 2,4\*
+[Ayomide Oshinjo](https://orcid.org/0000-0003-4303-0181) 1, [Daiqing Chen](https://orcid.org/0009-0003-5996-5181) 2, [Petar B. Petrov](https://orcid.org/0000-0001-5551-8032) 1,3, [Valerio Izzi](https://orcid.org/0000-0002-9960-4917) 1,3\*, [Alexandra Naba](https://orcid.org/0000-0002-4796-5614) 2,4\*
 
 1 Faculty of Biochemistry and Molecular Medicine & Faculty of Medicine, BioIM Unit, University of Oulu, Oulu, FI-90014, Finland
 2 Department of Physiology and Biophysics, University of Illinois Chicago, Chicago, IL 60612, USA
