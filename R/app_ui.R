@@ -42,7 +42,7 @@ page_fillable(
         ),
         h1("MatriSpace",
            class = "app-title m-0 me-2",
-           style = "font-size: 2.2rem; font-weight: 700; background: linear-gradient(135deg, #0d6efd, #6610f2); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;"
+           style = "font-size: 1.8rem; font-weight: 700; background: linear-gradient(135deg, #0d6efd, #6610f2); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;"
         )
       ),
       # Right - About button

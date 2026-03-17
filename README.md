@@ -2,18 +2,18 @@
 
 [Ayomide Oshinjo](https://orcid.org/0000-0003-4303-0181) 1, [Daiqing Chen](https://orcid.org/0009-0003-5996-5181) 2, [Petar B. Petrov](https://orcid.org/0000-0001-5551-8032) 1,3, [Valerio Izzi](https://orcid.org/0000-0002-9960-4917) 1,3\*, [Alexandra Naba](https://orcid.org/0000-0002-4796-5614) 2,4\*
 
-1 Faculty of Biochemistry and Molecular Medicine & Faculty of Medicine, BioIM Unit, University of Oulu, Oulu, FI-90014, Finland
-2 Department of Physiology and Biophysics, University of Illinois Chicago, Chicago, IL 60612, USA
-3 Infotech Institute, University of Oulu, Oulu, FI-90014, Finland
-4 University of Illinois Cancer Center, Chicago, IL 60612, USA
+1. Faculty of Biochemistry and Molecular Medicine & Faculty of Medicine, BioIM Unit, University of Oulu, Oulu, FI-90014, Finland
+2. Department of Physiology and Biophysics, University of Illinois Chicago, Chicago, IL 60612, USA
+3. Infotech Institute, University of Oulu, Oulu, FI-90014, Finland
+4. University of Illinois Cancer Center, Chicago, IL 60612, USA
 
 \* equally-contributing corresponding authors
 
 ---
 
 * MatriSpace features an intuitive graphical user interface implemented in R Shiny.
-* The online version of MatriSpace, featuring a collection of 198 pre-processed datasets, is available and **ready-to-use** at http://matrinet.shinyapps.io/matrispace
-* This repository contains the **offline version** of MatriSpace for local use with user-uploaded data. See [Installation](#installation) instructions below.
+* The online version of MatriSpace, supporting both user uploads and a collection of 198 pre-processed datasets, is available and **ready-to-use** at http://matrinet.shinyapps.io/matrispace
+* This repository contains the **offline version** of MatriSpace for local use with user-uploaded data (no dataset size restrictions). See [Installation](#installation) instructions below.
 * The [MatriSpace-analyses](https://github.com/Izzilab/MatriSpace-analyses) repository includes examples of analyses performed using MatriSpace.
 * If you use MatriSpace in your publications, please cite our preprint: **doi** [xxxxx](https://doi.org/xxxxx)
 
@@ -50,7 +50,7 @@ MatriSpace operates through three analytical stages: **Data Input**, **Matrisome
 
 MatriSpace accepts Seurat objects (`.rds`) or SpatialExperiment objects (`.rds`), ensuring compatibility with both Seurat and Bioconductor ecosystems. Upon loading, uploaded datasets undergo automated preprocessing including gene symbol standardization, matrisome gene set scoring, and ECM niche classification.
 
-The [online version](http://matrinet.shinyapps.io/matrispace) additionally provides access to a curated collection of 198 pre-processed 10x Visium datasets from public repositories (10x Genomics, HTAN, GEO, Zenodo), spanning 12 cancer types (n = 180 samples) and 10 healthy organ systems (n = 18 samples).
+The [online version](http://matrinet.shinyapps.io/matrispace) supports both user uploads (up to 1 GB) and a curated collection of 198 pre-processed 10x Visium datasets from public repositories (10x Genomics, HTAN, GEO, Zenodo), spanning 12 cancer types (n = 180 samples) and 10 healthy organ systems (n = 18 samples).
 
 ### Matrisome Profiling
 
