@@ -24,7 +24,7 @@
       },
       {
         "Name": "CRAN",
-        "URL": "https://cran.r-project.org"
+        "URL": "https://p3m.dev/cran/latest"
       }
     ]
   },
