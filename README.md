@@ -70,34 +70,26 @@ All results are exportable as plots and tables, and processed Seurat objects can
 
 ## Installation
 
-MatriSpace is distributed as an R package and a Docker image. The offline version supports user-uploaded data only; the pre-processed dataset collection is available exclusively through the [online version](http://matrinet.shinyapps.io/matrispace).
+MatriSpace is distributed as a Docker image and an R package. The offline version supports user-uploaded data only; the pre-processed dataset collection is available exclusively through the [online version](http://matrinet.shinyapps.io/matrispace).
 
 ### Docker (recommended)
 
-The Docker image bundles all dependencies and guarantees a reproducible environment:
+Requires [Docker Desktop](https://docs.docker.com/get-started/get-docker/) to be installed and running.
 
 ```bash
 docker pull ghcr.io/theayomideo/matrispace-app:main
 docker run -p 3838:3838 ghcr.io/theayomideo/matrispace-app:main
 ```
 
-Then open http://localhost:3838 in your browser.
+Once the container is running, open http://localhost:3838 in your browser.
 
 ### R Package
 
-Requires R >= 4.3.3 and [Bioconductor 3.18](https://bioconductor.org/install/).
+Requires [R](https://cran.r-project.org/) (>= 4.3.3).
 
 ```r
-# Install Bioconductor dependencies
-BiocManager::install(c(
-  "SpatialExperiment", "SingleCellExperiment", "SummarizedExperiment",
-  "glmGamPoi", "UCell"
-))
-
-# Install MatriSpace
-remotes::install_github("Theayomideo/matrispace-app")
-
-# Launch the app
+install.packages("pak")
+pak::pkg_install("Theayomideo/matrispace-app")
 matrispace.app::run_app()
 ```
 
