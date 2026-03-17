@@ -1,0 +1,76 @@
+Package: matrispace.app
+Title: MatriSpace - Offline Spatial Transcriptomics Matrisome Analysis
+Version: 1.0.0
+Authors@R: c(
+    person("MatriSpace", "Team", email = "matrisomeproject@gmail.com", role = c("aut", "cre"))
+  )
+Description: An offline, upload-only version of MatriSpace for analysing spatial
+    transcriptomics data with focus on matrisome (extracellular matrix) gene analysis.
+    Users upload their own Seurat or SpatialExperiment .rds files. All matrisome
+    reference data ships bundled with the package.
+License: MIT + file LICENSE
+Encoding: UTF-8
+Depends:
+    R (>= 3.5.0)
+Imports:
+    shiny,
+    DT,
+    dplyr,
+    data.table,
+    ggplot2,
+    patchwork,
+    shinyWidgets,
+    shinybusy,
+    shinyjs,
+    shinyhelper,
+    shinycssloaders,
+    Seurat,
+    SeuratObject,
+    glmGamPoi,
+    semla,
+    sp,
+    ggpubr,
+    shinydashboard,
+    spatstat,
+    reshape2,
+    egg,
+    ggnewscale,
+    ggrepel,
+    scales,
+    viridis,
+    capture,
+    Rfast,
+    Rfast2,
+    spatialEco,
+    writexl,
+    scico,
+    standardize,
+    DescTools,
+    plotly,
+    echarts4r,
+    ggiraph,
+    bslib,
+    bsicons,
+    scCustomize,
+    MERINGUE,
+    readxl,
+    HGNChelper,
+    UCell,
+    zip,
+    SpatialExperiment,
+    SingleCellExperiment,
+    SummarizedExperiment,
+    pheatmap,
+    openxlsx,
+    pbapply,
+    cicerone,
+    golem,
+    config,
+    Matrix,
+    RColorBrewer,
+    forcats,
+    jsonlite,
+    knitr,
+    tidyr,
+    methods
+RoxygenNote: 7.3.2

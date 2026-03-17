@@ -1,0 +1,7 @@
+renv/
+.Rprofile
+.Rproj.user/
+*.Rproj
+dev/
+.git/
+.gitignore

@@ -1,0 +1,6 @@
+default:
+  golem_name: matrispace.app
+  golem_version: 1.0.0
+  app_prod: no
+production:
+  app_prod: yes
