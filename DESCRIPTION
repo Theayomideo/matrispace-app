@@ -24,8 +24,8 @@ Imports:
     shinyjs,
     shinyhelper,
     shinycssloaders,
-    Seurat (>= 5.0.2, < 5.1.0),
-    SeuratObject (>= 5.0.2, < 5.1.0),
+    Seurat,
+    SeuratObject,
     glmGamPoi,
     semla,
     sp,
@@ -74,6 +74,8 @@ Imports:
     tidyr,
     methods
 Remotes:
+    cran::Seurat@5.0.2,
+    cran::SeuratObject@5.0.2,
     dreamRs/capture,
     JohnCoene/echarts4r,
     Theayomideo/MERINGUE,
