@@ -59,6 +59,16 @@ $(document).ready(function() {
 
 let vizInstances = {};
 
+function getLayoutWidth(node) {
+  if (!node) return 0;
+  return node.clientWidth || node.offsetWidth || node.getBoundingClientRect().width || 0;
+}
+
+function getLayoutHeight(node) {
+  if (!node) return 0;
+  return node.clientHeight || node.offsetHeight || node.getBoundingClientRect().height || 0;
+}
+
 function initializeAllD3Visualizers() {
   $('.d3-viz-instance-container').each(function() {
     const prefix = $(this).data('prefix');
@@ -96,7 +106,7 @@ function drawVisualization(prefix) {
   const { spots, imageUrl, clusterColors, imageDims, lowresSF, annotationName } = instance.cachedVizData;
   const svg = instance.svg;
 
-  const containerWidth = instance.containerNode.getBoundingClientRect().width;
+  const containerWidth = getLayoutWidth(instance.containerNode);
   if (containerWidth === 0) return;
 
   const aspectRatio = imageDims.height / imageDims.width;
@@ -171,9 +181,9 @@ function setupZoom(prefix, url) {
         zoom.originalImg.attr('src', url);
         zoom.container.classed('hidden', false);
 
-        const svgRect = svgNode.getBoundingClientRect();
-        const zoomPanelRect = zoom.panel.node().getBoundingClientRect();
-        const zoomContainerSize = zoomPanelRect.width;
+        const svgWidth = parseFloat(svg.attr("width")) || getLayoutWidth(svgNode);
+        const svgHeight = parseFloat(svg.attr("height")) || getLayoutHeight(svgNode);
+        const zoomContainerSize = getLayoutWidth(zoom.panel.node());
 
         zoom.container.style("width", zoomContainerSize + "px").style("height", zoomContainerSize + "px");
 
@@ -184,8 +194,8 @@ function setupZoom(prefix, url) {
         zoom.originalImg.style('width', zoomedImageWidth + 'px').style('height', zoomedImageHeight + 'px');
 
         const [mouseXInSvg, mouseYInSvg] = d3.mouse(this);
-        const mouseXProportion = mouseXInSvg / svgRect.width;
-        const mouseYProportion = mouseYInSvg / svgRect.height;
+        const mouseXProportion = mouseXInSvg / svgWidth;
+        const mouseYProportion = mouseYInSvg / svgHeight;
         const moX = -(mouseXProportion * zoomedImageWidth - zoomContainerSize / 2);
         const moY = -(mouseYProportion * zoomedImageHeight - zoomContainerSize / 2);
         zoom.originalImg.style('margin-left', moX + 'px').style('margin-top', moY + 'px');

@@ -78,6 +78,11 @@ app_server <- function(input, output, session) {
       el = "export_dropdown_btn",
       title = "Export Results",
       description = "Once your analysis is complete, use this button to download all data tables and high-resolution plots (PNG and PDF) packaged in a single ZIP archive for your records or publications."
+    )$
+    step(
+      el = "about",
+      title = "Tour Complete",
+      description = "You have now completed this guided tour. For further information on data sources and citations, please consult the 'About' section. You can restart this tour at any time from the sidebar."
     )
 
   # --- Tour Trigger ---
@@ -523,7 +528,7 @@ app_server <- function(input, output, session) {
 
     main_divisions_map <- c("ECM Glycoproteins" = "glycoprotein", "Collagens" = "collagen", "Proteoglycans" = "proteoglycan", "ECM-affiliated Proteins" = "affliated_protein", "ECM Regulators" = "regulator", "Secreted Factors" = "secreted_factor")
 
-    # Map for ECM subcategories card (functional categories)
+    # Map for Matrisome subcategories card (functional categories)
     ecm_subcategories_map <- c(
       "Perivascular" = "perivascular",
       "Hemostasis" = "hemostasis",
@@ -531,7 +536,7 @@ app_server <- function(input, output, session) {
       "Growth-factor binding" = "gf_binding"
     )
 
-    # Map for ECM gene families card
+    # Map for Matrisome gene families card
     ecm_gene_families_map <- c(
       "Laminins" = "laminin",
       "Matricellular proteins" = "matricellular",
@@ -1130,7 +1135,7 @@ app_server <- function(input, output, session) {
                        choices = nmv,
                        options = list(create = FALSE, placeholder = 'Type to search...'))
       } else if (input$sel1 == "matrisome signature") {
-        selectizeInput("gene1", "Select ECM gene list:",
+        selectizeInput("gene1", "Select Matrisome gene list:",
                        choices = list(
                          `Matrisome categories` = c("ECM Glycoproteins", "Collagens", "Proteoglycans",
                                                      "ECM-affiliated Proteins", "ECM Regulators", "Secreted Factors"),
@@ -1174,7 +1179,7 @@ app_server <- function(input, output, session) {
     } 
     
     if (input$sel2 == "matrisome signature") {
-      return(selectizeInput("gene2", "Select ECM gene list:",
+      return(selectizeInput("gene2", "Select Matrisome gene list:",
                      choices = list(
                        `Matrisome categories` = c("ECM Glycoproteins", "Collagens", "Proteoglycans",
                                                    "ECM-affiliated Proteins", "ECM Regulators", "Secreted Factors"),
@@ -1768,7 +1773,7 @@ app_server <- function(input, output, session) {
     create_plot_renderers(group, main_divisions[group], pt_size_input_id = "main_pt_size")
   }
   
-  # --- Loop to generate ECM Subcategories Plots ---
+  # --- Loop to generate Matrisome Subcategories Plots ---
   ecm_subcategories_plots <- c(
     "perivascular" = "perivascular",
     "hemostasis" = "hemostasis",
@@ -1779,7 +1784,7 @@ app_server <- function(input, output, session) {
     create_plot_renderers(group, ecm_subcategories_plots[group], pt_size_input_id = "subcategories_pt_size")
   }
 
-  # --- Loop to generate ECM Gene Families Plots ---
+  # --- Loop to generate Matrisome Gene Families Plots ---
   ecm_gene_families_plots <- c(
     "laminin" = "laminin",
     "matricellular" = "matricellular",
@@ -1867,12 +1872,12 @@ app_server <- function(input, output, session) {
     create_footer_renderer(main_divisions[group])
   }
   
-  # --- Loop to generate ECM Subcategories Footers ---
+  # --- Loop to generate Matrisome Subcategories Footers ---
   for (group in names(ecm_subcategories_plots)) {
     create_footer_renderer(ecm_subcategories_plots[group])
   }
 
-  # --- Loop to generate ECM Gene Families Footers ---
+  # --- Loop to generate Matrisome Gene Families Footers ---
   for (group in names(ecm_gene_families_plots)) {
     create_footer_renderer(ecm_gene_families_plots[group])
   }
@@ -2519,7 +2524,7 @@ app_server <- function(input, output, session) {
               ecm_sigs <- c("Interstitial", "Basement")
               for(sig in ecm_sigs) {
                 p_sig <- SpatialFeaturePlot(seurat_obj_for_export, features = paste0(sig, "_UCell"), pt.size.factor = effective_pt_size(input$ecm_pt_size))
-                save_plot(p_sig, paste0("21_ecm_signature_", tolower(sig)))
+                save_plot(p_sig, paste0("21_ecm_niche_score_", tolower(sig)))
               }
 
               ecm_subcategories <- c("perivascular", "hemostasis", "elastic_fibers", "gf_binding")
@@ -2533,8 +2538,8 @@ app_server <- function(input, output, session) {
                                               features = paste0(subcat, "_log_scaled_score"),
                                               pt.size.factor = effective_pt_size(input$subcategories_pt_size)) +
                     theme(legend.position = "right")
-                  save_plot(p_dist, paste0("12_ecm_subcategory_", subcat, "_distribution"))
-                  save_plot(p_hot, paste0("13_ecm_subcategory_", subcat, "_hotspot"))
+                  save_plot(p_dist, paste0("12_matrisome_subcategory_", subcat, "_distribution"))
+                  save_plot(p_hot, paste0("13_matrisome_subcategory_", subcat, "_hotspot"))
                 }
               }
 
@@ -2549,8 +2554,8 @@ app_server <- function(input, output, session) {
                                               features = paste0(family, "_log_scaled_score"),
                                               pt.size.factor = effective_pt_size(input$families_pt_size)) +
                     theme(legend.position = "right")
-                  save_plot(p_dist, paste0("14_ecm_family_", family, "_distribution"))
-                  save_plot(p_hot, paste0("15_ecm_family_", family, "_hotspot"))
+                  save_plot(p_dist, paste0("14_matrisome_gene_family_", family, "_distribution"))
+                  save_plot(p_hot, paste0("15_matrisome_gene_family_", family, "_hotspot"))
                 }
               }
 
@@ -2654,6 +2659,53 @@ app_server <- function(input, output, session) {
 
           # --- 4. CREATE README ---
           incProgress(0.1, detail = "Finalizing package...")
+          seurat_filename <- paste0(gsub(" ", "_", nm()), "_MatriSpace.rds")
+          seurat_export_path <- file.path(dir_data, seurat_filename)
+          data_readme_lines <- c(
+            "- Data/: Contains the raw data tables generated by the analysis."
+          )
+          if (file.exists(file.path(dir_data, "spot_metadata.csv"))) {
+            data_readme_lines <- c(
+              data_readme_lines,
+              "  - spot_metadata.csv: Complete metadata for each spot (coordinates, annotations, scores)."
+            )
+          }
+          if (!is.null(rv$analysis_results) && file.exists(file.path(dir_data, "main_feature_data.csv"))) {
+            data_readme_lines <- c(
+              data_readme_lines,
+              "  - main_feature_data.csv: Expression values for the selected features for each spot."
+            )
+          }
+          if (isTRUE(rv$matrisome_analysis_done) && file.exists(file.path(dir_data, "matrisome_scores.csv"))) {
+            data_readme_lines <- c(
+              data_readme_lines,
+              "  - matrisome_scores.csv: All calculated matrisome gene list scores for each spot."
+            )
+          }
+          if (!is.null(rv$analysis_results) && file.exists(file.path(dir_data, "spatial_statistics_summary.csv"))) {
+            data_readme_lines <- c(
+              data_readme_lines,
+              "  - spatial_statistics_summary.csv: A summary of all calculated correlation statistics."
+            )
+          }
+          if (!is.null(rv$lr_results) && file.exists(file.path(dir_data, "lr_coexpression_stats.csv"))) {
+            data_readme_lines <- c(
+              data_readme_lines,
+              "  - lr_coexpression_stats.csv: Ligand-receptor co-expression enrichment statistics per niche."
+            )
+          }
+          if (!is.null(rv$lr_results) && file.exists(file.path(dir_data, "lr_coexpression_means.csv"))) {
+            data_readme_lines <- c(
+              data_readme_lines,
+              "  - lr_coexpression_means.csv: Mean co-expression scores for each L-R axis per niche."
+            )
+          }
+          if (file.exists(seurat_export_path)) {
+            data_readme_lines <- c(
+              data_readme_lines,
+              paste0("  - ", seurat_filename, ": Complete Seurat object with all analysis results.")
+            )
+          }
           readme_text <- c(
             "MatriSpace Analysis Export",
             "==========================",
@@ -2664,14 +2716,7 @@ app_server <- function(input, output, session) {
             "- Plots/: Contains all generated plots in two formats.",
             "  - PNG_for_Viewing/: High-resolution PNGs for presentations and quick viewing.",
             "  - PDF_for_Publication/: Vector-based PDFs for publication and editing.",
-            "- Data/: Contains the raw data tables generated by the analysis.",
-            "  - spot_metadata.csv: Complete metadata for each spot (coordinates, annotations, scores).",
-            "  - main_feature_data.csv: Expression values for the selected features for each spot.",
-            "  - matrisome_scores.csv: All calculated matrisome signature scores for each spot.",
-            "  - spatial_statistics_summary.csv: A summary of all calculated correlation statistics.",
-            "  - lr_coexpression_stats.csv: Ligand-receptor co-expression enrichment statistics per niche.",
-            "  - lr_coexpression_means.csv: Mean co-expression scores for each L-R axis per niche.",
-            paste0("  - ", gsub(" ", "_", nm()), "_MatriSpace.rds: Complete Seurat object with all analysis results.")
+            data_readme_lines
           )
           writeLines(readme_text, file.path(temp_dir, "README.txt"))
           
@@ -2877,7 +2922,7 @@ app_server <- function(input, output, session) {
 
               for (sig in c("Interstitial", "Basement")) {
                 p_sig <- SpatialFeaturePlot(seurat_obj, features = paste0(sig, "_UCell"), pt.size.factor = effective_pt_size(input$ecm_pt_size))
-                save_plot(p_sig, paste0("21_ecm_signature_", tolower(sig)))
+                save_plot(p_sig, paste0("21_ecm_niche_score_", tolower(sig)))
               }
 
               ecm_subcategories <- c("perivascular", "hemostasis", "elastic_fibers", "gf_binding")
@@ -2891,8 +2936,8 @@ app_server <- function(input, output, session) {
                                               features = paste0(subcat, "_log_scaled_score"),
                                               pt.size.factor = effective_pt_size(input$subcategories_pt_size)) +
                     theme(legend.position = "right")
-                  save_plot(p_dist, paste0("12_ecm_subcategory_", subcat, "_distribution"))
-                  save_plot(p_hot, paste0("13_ecm_subcategory_", subcat, "_hotspot"))
+                  save_plot(p_dist, paste0("12_matrisome_subcategory_", subcat, "_distribution"))
+                  save_plot(p_hot, paste0("13_matrisome_subcategory_", subcat, "_hotspot"))
                 }
               }
 
@@ -2907,8 +2952,8 @@ app_server <- function(input, output, session) {
                                               features = paste0(family, "_log_scaled_score"),
                                               pt.size.factor = effective_pt_size(input$families_pt_size)) +
                     theme(legend.position = "right")
-                  save_plot(p_dist, paste0("14_ecm_family_", family, "_distribution"))
-                  save_plot(p_hot, paste0("15_ecm_family_", family, "_hotspot"))
+                  save_plot(p_dist, paste0("14_matrisome_gene_family_", family, "_distribution"))
+                  save_plot(p_hot, paste0("15_matrisome_gene_family_", family, "_hotspot"))
                 }
               }
 

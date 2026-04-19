@@ -23,7 +23,7 @@
 [![Badge](https://img.shields.io/badge/Manuscript-bioRxiv-red)](https://doi.org/xxxxx)
 [![Badge](https://img.shields.io/badge/Release-v1.0-green)](https://github.com/Theayomideo/matrispace-app/releases/tag/v1.0)
 
-* Authors and maintainers: [Izzi Lab](https://www.oulu.fi/en/research-groups/izzi-group) and [Naba Lab](https://sites.google.com/a/uic.edu/nabalab/) (✉️ <matrisomeproject@gmail.com>)
+* Authors and maintainers: [Izzi Lab](https://www.oulu.fi/en/research-groups/izzi-group) and [Naba Lab for ECM Research](https://naba.lab.uic.edu/) (✉️ <matrisomeproject@gmail.com>)
 * This work was supported by the following grants (green: Naba Lab; blue: Izzi Lab):
 
 [![Badge](https://img.shields.io/badge/HuBMAP-U01HG012680-lightgreen)](https://commonfund.nih.gov/HuBMAP)
@@ -36,7 +36,7 @@
 
 The extracellular matrix (ECM) is a complex meshwork of proteins that serves as the master structural organizer of all tissues. Although spatial transcriptomics enables the study of ECM gene expression in its native tissue context, existing computational tools are designed primarily for intracellular expression variability and cell-cell signaling, and thus poorly capture the spatial architecture, regional specialization, and niche-specific deployment of ECM components.
 
-MatriSpace is a computational framework designed to identify, quantify, and interpret spatial expression patterns of matrisome genes, ECM signatures, and ECM-defined niches from spatial transcriptomics data. It focuses on the spatial organization, co-localization, and regional coordination of matrisome components, as well as their relationships with non-matrisome genes across entire tissue sections.
+MatriSpace is a computational framework designed to identify, quantify, and interpret spatial expression patterns of matrisome genes, ECM gene sets, and ECM-defined niches from spatial transcriptomics data. It focuses on the spatial organization, co-localization, and regional coordination of matrisome components, as well as their relationships with non-matrisome genes across entire tissue sections.
 
 ## Graphical Abstract
 
@@ -54,7 +54,7 @@ The [online version](http://matrinet.shinyapps.io/matrispace) supports both user
 
 ### Matrisome Profiling
 
-All analyses are stratified by a user-selected annotation variable (e.g., cell type labels, clusters, or pathologist-defined regions). The matrisome profiling workflow computes expression scores for **6 matrisome categories** (Glycoproteins, Collagens, Proteoglycans, ECM Regulators, Secreted Factors, ECM-affiliated), **4 subcategories** (Perivascular, Hemostasis, Elastic fibers, Growth-factor binding), and **4 ECM gene families** (Laminins, Matricellular proteins, Syndecans, Glypicans).
+All analyses are stratified by a user-selected annotation variable (e.g., cell type labels, clusters, or pathologist-defined regions). The matrisome profiling workflow computes expression scores for **6 matrisome categories** (Glycoproteins, Collagens, Proteoglycans, ECM Regulators, Secreted Factors, ECM-affiliated), **4 subcategories** (Perivascular, Hemostasis, Elastic fibers, Growth-factor binding), and **4 matrisome gene families** (Laminins, Matricellular proteins, Syndecans, Glypicans).
 
 Results are presented as spatial distribution maps and hotspot maps, each accompanied by spatial autocorrelation statistics.
 
@@ -97,4 +97,4 @@ matrispace.app::run_app()
 
 * [The Matrisome Project](https://sites.google.com/uic.edu/matrisome/home): an open-access resource sharing protocols, tools, and datasets to support ECM research.
 * [MatriCom](https://github.com/Izzilab/MatriCom) and [MatriComDB](https://github.com/Izzilab/MatriCom): a tool and curated database for inferring ECM communication systems from scRNA-seq data.
-* [Naba Lab](https://sites.google.com/a/uic.edu/nabalab/) ([@GitHub](https://github.com/Matrisome/)) and [Izzi Lab](https://www.oulu.fi/en/research-groups/izzi-group) ([@GitHub](https://github.com/izzilab))
+* [Naba Lab for ECM Research](https://naba.lab.uic.edu/) ([@GitHub](https://github.com/Matrisome/)) and [Izzi Lab](https://www.oulu.fi/en/research-groups/izzi-group) ([@GitHub](https://github.com/izzilab))

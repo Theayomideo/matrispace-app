@@ -487,7 +487,7 @@ addfeat <- function(obj, feat1, sel1, feat2, sel2) {
 #' @param name Name for the output score column
 #' @param counts_matrix Pre-fetched expression matrix
 #' @return Named list with robust_score, log_scaled_score, and gene_count
-process_matrisome_expression <- function(gene_list, seurat_obj, name, counts_matrix, matrisome = NULL) {
+process_matrisome_expression <- function(gene_list, seurat_obj, name, counts_matrix, matrisome) {
   # Use the pre-fetched counts matrix passed as argument
   counts <- counts_matrix
 

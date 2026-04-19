@@ -5,6 +5,7 @@
 :root {
   --color-primary-accent: #4338ca;
   --color-secondary-accent: #0d9488;
+  --desktop-app-scale: 0.8;
 
   --color-background: #f8fafc;
   --color-surface: #ffffff;
@@ -32,6 +33,26 @@ body {
   */
 }
 
+.app-scale-target {
+  transform-origin: top left;
+}
+
+/* Match the "80% browser zoom" look on large screens without affecting mobile. */
+@media (min-width: 1200px) {
+  .app-scale-target {
+    zoom: var(--desktop-app-scale);
+  }
+}
+
+@supports not (zoom: 1) {
+  @media (min-width: 1200px) {
+    .app-scale-target {
+      width: calc(100% / var(--desktop-app-scale));
+      transform: scale(var(--desktop-app-scale));
+    }
+  }
+}
+
 a {
   color: var(--color-primary-accent);
 }
@@ -44,12 +65,16 @@ a {
   box-shadow: none;
 }
 
+.app-header #app-branding {
+  min-height: 50px;
+}
+
 .app-title {
-  background: linear-gradient(135deg, var(--color-primary-accent), var(--color-secondary-accent));
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
+  background: none;
+  -webkit-text-fill-color: currentColor;
   color: var(--color-primary-accent);
+  line-height: 1;
+  transform: translateY(2px);
 }
 
 .bslib-sidebar-layout > .sidebar {
@@ -145,6 +170,7 @@ a {
 }
 
 /* Card accent borders by category */
+.card.info-accent-card,
 .card:has(#tissue_image_plot),
 .card:has(#cluster_plot) {
   border-top-color: var(--color-info);
@@ -727,8 +753,10 @@ div.zoom_container {
 /* 17. LOGO
 ---------------------------------------------------- */
 .matrispace-logo {
-  display: inline-block;
-  vertical-align: middle;
+  display: block;
+  height: 50px;
+  width: auto;
+  flex: 0 0 auto;
 }
 
 /* 18. SIDEBAR DEVELOPED BY SECTION

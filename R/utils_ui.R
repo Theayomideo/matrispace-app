@@ -108,7 +108,7 @@ create_matrisome_ui <- function(title, name_prefix) {
         "Hotspots",
         bslib::tooltip(
           bs_icon("info-circle", class = "ms-1"),
-          "Highlights spots with the highest absolute expression using a log-scaled score, allowing the visualisation of the full signal range. Ideal for pinpointing primary sources of a gene signature.",
+          "Highlights spots with the highest absolute expression using a log-scaled score, allowing the visualisation of the full signal range. Ideal for pinpointing primary sources of a gene set.",
           options = list(customClass = "matrispace-tooltip")
         )
       ),
@@ -148,7 +148,7 @@ create_subdivision_ui <- function(title, name_prefix, toggle_prefix) {
         "Hotspots",
         bslib::tooltip(
           bs_icon("info-circle", class = "ms-1"),
-          "Highlights spots with the highest absolute expression using a log-scaled score, allowing the visualisation of the full signal range. Ideal for pinpointing primary sources of a gene signature.",
+          "Highlights spots with the highest absolute expression using a log-scaled score, allowing the visualisation of the full signal range. Ideal for pinpointing primary sources of a gene set.",
           options = list(customClass = "matrispace-tooltip")
         )
       ),
@@ -187,7 +187,7 @@ create_ecm_sig_ui <- function(title, name_prefix) {
         "Hotspots",
         bslib::tooltip(
           bs_icon("info-circle", class = "ms-1"),
-          "Highlights spots with the highest absolute expression using a log-scaled score, allowing the visualisation of the full signal range. Ideal for pinpointing primary sources of a gene signature.",
+          "Highlights spots with the highest absolute expression using a log-scaled score, allowing the visualisation of the full signal range. Ideal for pinpointing primary sources of a gene set.",
           options = list(customClass = "matrispace-tooltip")
         )
       ),

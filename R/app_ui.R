@@ -27,7 +27,7 @@ page_fillable(
 
   # Full-width header spanning both sidebar and main content
   div(
-    class = "app-header border-bottom",
+    class = "app-header app-scale-target border-bottom",
     div(
       class = "d-flex justify-content-between align-items-center py-3 px-4",
       # Left - App name with enhanced styling
@@ -35,14 +35,14 @@ page_fillable(
         id = "app-branding",
         class = "d-flex align-items-center gap-2",
         tags$img(
-          src = "www/matrispace_logo.svg",
+          src = "www/matrispace_logo.png",
           class = "matrispace-logo",
           alt = "MatriSpace Logo",
           style = "height: 50px; margin-right: 0.25rem;"
         ),
         h1("MatriSpace",
            class = "app-title m-0 me-2",
-           style = "font-size: 1.8rem; font-weight: 700; background: linear-gradient(135deg, #0d6efd, #6610f2); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;"
+           style = "font-size: 2.2rem; font-weight: 700;"
         )
       ),
       # Right - About button
@@ -56,6 +56,7 @@ page_fillable(
     )
   ),
 
+  htmltools::tagAppendAttributes(
   layout_sidebar(
     gap = 0,
     sidebar = sidebar(
@@ -73,9 +74,9 @@ page_fillable(
             tags$img(src = "www/izzilab_logo.png", alt = "Izzi Lab", style = "height: 60px; cursor: pointer;")
           ),
           tags$a(
-            href = "https://sites.google.com/a/uic.edu/nabalab/",
+            href = "https://naba.lab.uic.edu/",
             target = "_blank",
-            tags$img(src = "www/naba_lab_logo.svg", alt = "Naba Lab", style = "height: 60px; cursor: pointer;")
+            tags$img(src = "www/naba_lab_logo.png", alt = "Naba Lab for ECM Research", style = "height: 60px; cursor: pointer;")
           )
         ),
         p(
@@ -201,7 +202,7 @@ page_fillable(
                 div(
                   class = "text-center p-2",
                   bsicons::bs_icon("grid-3x3", size = "1.5rem"),
-                  div(class = "small mt-1", "ECM gene list")
+                  div(class = "small mt-1", "Matrisome gene list")
                 )
               )
             )
@@ -231,7 +232,7 @@ page_fillable(
               div(id = "card_none", class = "feature-card secondary-card", div(class = "text-center p-2", bsicons::bs_icon("x-circle", size = "1.5rem"), div(class = "small mt-1", "None"))),
               div(id = "card_gene2", class = "feature-card secondary-card", div(class = "text-center p-2", bsicons::bs_icon("diagram-3", size = "1.5rem"), div(class = "small mt-1", "Matrisome gene"))),
               div(id = "card_any", class = "feature-card secondary-card", div(class = "text-center p-2", bsicons::bs_icon("search", size = "1.5rem"), div(class = "small mt-1", "Any gene"))),
-              div(id = "card_signature2", class = "feature-card secondary-card", div(class = "text-center p-2", bsicons::bs_icon("grid-3x3", size = "1.5rem"), div(class = "small mt-1", "ECM gene list")))
+              div(id = "card_signature2", class = "feature-card secondary-card", div(class = "text-center p-2", bsicons::bs_icon("grid-3x3", size = "1.5rem"), div(class = "small mt-1", "Matrisome gene list")))
             )
           ),
 
@@ -295,6 +296,7 @@ page_fillable(
 
           # Tissue Image Card
           card(
+            class = "info-accent-card",
             card_header(
               "Tissue image",
               uiOutput("tissue_link"),
@@ -307,6 +309,7 @@ page_fillable(
 
           # Spatial Plot Card
           card(
+            class = "info-accent-card",
             full_screen = TRUE,
             card_header(
               "Cluster map",
@@ -337,7 +340,7 @@ page_fillable(
                   bslib::tooltip(
                     bs_icon("info-circle", class = "ms-1"),
                     HTML(paste(
-                      "Visualises a matrisome signature using two distinct statistical views. Each view helps answer a different biological question.<br><br>",
+                      "Visualises a matrisome gene set using two distinct statistical views. Each view helps answer a different biological question.<br><br>",
                       "&bull; <strong>Spatial Distribution (Relative Activity):</strong> This view uses a <em>Robust Z-score</em> to show how much a spot's expression level deviates from the tissue's typical (median) level. Use this to find regions with statistically up- or down-regulated expression level compared to the tissue's baseline.<br><br>",
                       "&bull; <strong>Hotspots (Absolute Activity):</strong> This view uses a <em>log-transformed score</em> to effectively show the full expression range. Use this to identify spots with the highest expression level without letting extreme values dominate the colour scale."
                     )),
@@ -388,7 +391,7 @@ page_fillable(
               )
             ),
 
-            # --- ECM Subcategories Card (Functional Categories) ---
+            # --- Matrisome Subcategories Card (Functional Categories) ---
             card(
               class = "section-card",
               card_header(
@@ -398,7 +401,7 @@ page_fillable(
                   bslib::tooltip(
                     bs_icon("info-circle", class = "ms-1"),
                     HTML(paste(
-                      "Visualises a matrisome signature using two distinct statistical views. Each view helps answer a different biological question.<br><br>",
+                      "Visualises a matrisome gene set using two distinct statistical views. Each view helps answer a different biological question.<br><br>",
                       "&bull; <strong>Spatial Distribution (Relative Activity):</strong> This view uses a <em>Robust Z-score</em> to show how much a spot's expression level deviates from the tissue's typical (median) level. Use this to find regions that are statistically up- or down-regulated compared to the tissue's baseline.<br><br>",
                       "&bull; <strong>Hotspots (Absolute Activity):</strong> This view uses a <em>log-transformed score</em> to effectively show the full expression range. Use this to identify spots with the highest expression level without letting extreme values dominate the colour scale."
                     )),
@@ -447,7 +450,7 @@ page_fillable(
               )
             ),
 
-            # --- ECM Gene Families Card ---
+            # --- Matrisome Gene Families Card ---
             card(
               class = "section-card",
               card_header(
@@ -457,7 +460,7 @@ page_fillable(
                   bslib::tooltip(
                     bs_icon("info-circle", class = "ms-1"),
                     HTML(paste(
-                      "Visualises a matrisome signature using two distinct statistical views. Each view helps answer a different biological question.<br><br>",
+                      "Visualises a matrisome gene set using two distinct statistical views. Each view helps answer a different biological question.<br><br>",
                       "&bull; <strong>Spatial Distribution (Relative Activity):</strong> This view uses a <em>Robust Z-score</em> to show how much a spot's expression level deviates from the tissue's typical (median) level. Use this to find regions that are statistically up- or down-regulated compared to the tissue's baseline.<br><br>",
                       "&bull; <strong>Hotspots (Absolute Activity):</strong> This view uses a <em>log-transformed score</em> to effectively show the full expression range. Use this to identify spots with the highest expression level without letting extreme values dominate the colour scale."
                     )),
@@ -527,7 +530,7 @@ page_fillable(
                   bslib::tooltip(
                     bs_icon("info-circle", class = "ms-1"),
                     HTML(paste(
-                      "A spatial plot visualising the activity of a specific ECM niche (e.g., Interstitial). The score is calculated from the collective expression of each gene from the gene set or signature in each spot.<br><br>",
+                      "A spatial plot visualising the activity of a specific ECM niche (e.g., Interstitial). The score is calculated from the collective expression of each gene from the gene set in each spot.<br><br>",
                       "Unlike the discrete 'ECM niche annotations' map, this continuous score can reveal gradients of signature expression levels and areas where different ECM gene expression programmes may overlap."
                     )),
                     options = list(customClass = "matrispace-tooltip")
@@ -848,7 +851,7 @@ page_fillable(
               full_screen = TRUE,
               card_header(
                 span(
-                  "LISA spatial association",
+                  "Spatial association",
                   bslib::tooltip(
                     bs_icon("info-circle", class = "ms-1"),
                     HTML(paste(
@@ -888,9 +891,9 @@ page_fillable(
             h4("Data resources"),
             p(strong("MatriSpace is powered by the following databases:"),
             tags$ul(
-              tags$li("The matrisome gene sets are available via The Matrisome Project: ",
+              tags$li("The matrisome gene lists are available via The Matrisome Project: ",
                       tags$a(href = "https://matrisome.org", target = "_blank", "https://matrisome.org")),
-              tags$li("Experimental ECM signatures are deployed in the Molecular Signature Database (MSigDB): ",
+              tags$li("Experimental ECM gene sets are available via the Molecular Signatures Database (MSigDB): ",
                       tags$a(href = "https://www.gsea-msigdb.org/gsea/msigdb/index.jsp", target = "_blank", "https://www.gsea-msigdb.org/gsea/msigdb/index.jsp")),
               tags$li("Matrisome gene subcategories and families are sourced from Gene Ontology: ",
                       tags$a(href = "https://geneontology.org/", target = "_blank", "https://geneontology.org/"))
@@ -916,6 +919,8 @@ page_fillable(
         )
       )
     )
+  ),
+  class = "app-scale-target"
   )
 )
 
