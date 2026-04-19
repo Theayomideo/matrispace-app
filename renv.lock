@@ -761,17 +761,6 @@
       ],
       "Hash": "1716e201f81ced0f456dd5ec85fe20f8"
     },
-    "S7": {
-      "Package": "S7",
-      "Version": "0.2.1",
-      "Source": "Repository",
-      "Repository": "CRAN",
-      "Requirements": [
-        "R",
-        "utils"
-      ],
-      "Hash": "9da85950949574264f92f91f0e23de26"
-    },
     "Seurat": {
       "Package": "Seurat",
       "Version": "5.0.2",
@@ -2009,25 +1998,28 @@
     },
     "ggplot2": {
       "Package": "ggplot2",
-      "Version": "4.0.1",
+      "Version": "3.5.2",
       "Source": "Repository",
-      "Repository": "CRAN",
+      "Repository": "RSPM",
       "Requirements": [
+        "MASS",
         "R",
-        "S7",
         "cli",
+        "glue",
         "grDevices",
         "grid",
         "gtable",
         "isoband",
         "lifecycle",
+        "mgcv",
         "rlang",
         "scales",
         "stats",
+        "tibble",
         "vctrs",
         "withr"
       ],
-      "Hash": "1bfa14b2a1668b3569dafb0478b2636b"
+      "Hash": "7ad64861e028a777d7d67ff83231b548"
     },
     "ggprism": {
       "Package": "ggprism",
