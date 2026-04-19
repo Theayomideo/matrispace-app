@@ -24,8 +24,9 @@ RUN apt-get update && apt-get install -y \
     libudunits2-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Install renv and BiocManager
-RUN R -e "install.packages(c('renv', 'BiocManager'), repos = 'https://cran.r-project.org')"
+# Install renv, BiocManager, and pak (pak = robust installer backend for renv;
+# avoids subprocess lib-path issues when building GitHub remotes from source).
+RUN R -e "install.packages(c('renv', 'BiocManager', 'pak'), repos = 'https://cran.r-project.org')"
 
 # Install Bioconductor packages (renv can't resolve archived Bioc URLs)
 RUN R -e "BiocManager::install(version = '3.18', ask = FALSE)" && \
@@ -47,6 +48,7 @@ COPY renv.lock renv.lock
 
 # Restore exact CRAN + GitHub package versions from lockfile
 RUN R -e " \
+  options(renv.config.pak.enabled = TRUE); \
   bioc_pkgs <- c( \
     'Biobase', 'BiocGenerics', 'BiocParallel', 'BiocVersion', \
     'DelayedArray', 'DelayedMatrixStats', 'GenomeInfoDb', 'GenomeInfoDbData', \
