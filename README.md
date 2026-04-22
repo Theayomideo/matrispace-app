@@ -2,7 +2,7 @@
 
 [Ayomide Oshinjo](https://orcid.org/0000-0003-4303-0181) 1, [Daiqing Chen](https://orcid.org/0009-0003-5996-5181) 2, [Petar B. Petrov](https://orcid.org/0000-0001-5551-8032) 1,3, [Valerio Izzi](https://orcid.org/0000-0002-9960-4917) 1,3\*, [Alexandra Naba](https://orcid.org/0000-0002-4796-5614) 2,4\*
 
-1. Faculty of Biochemistry and Molecular Medicine & Faculty of Medicine, BioIM Unit, University of Oulu, Oulu, FI-90014, Finland
+1. Faculty of Biochemistry and Molecular Medicine, University of Oulu, Oulu, FI-90014, Finland
 2. Department of Physiology and Biophysics, University of Illinois Chicago, Chicago, IL 60612, USA
 3. Infotech Institute, University of Oulu, Oulu, FI-90014, Finland
 4. University of Illinois Cancer Center, Chicago, IL 60612, USA
@@ -14,12 +14,12 @@
 * MatriSpace features an intuitive graphical user interface implemented in R Shiny.
 * The online version of MatriSpace, supporting both user uploads and a collection of 198 pre-processed datasets, is available and **ready-to-use** at http://matrinet.shinyapps.io/matrispace
 * This repository contains the **offline version** of MatriSpace for local use with user-uploaded data (no dataset size restrictions). See [Installation](#installation) instructions below.
-* The [MatriSpace-analyses](https://github.com/Izzilab/MatriSpace-analyses) repository includes examples of analyses performed using MatriSpace.
+* The [`analyses/breast-case-study/`](analyses/breast-case-study/) folder contains the worked example of downstream analysis on MatriSpace output, as used in the manuscript's case study.
 * If you use MatriSpace in your publications, please cite our preprint: **doi** [xxxxx](https://doi.org/xxxxx)
 
 [![Badge](https://img.shields.io/badge/MatriSpace-Online-blue)](http://matrinet.shinyapps.io/matrispace)
 [![Badge](https://img.shields.io/badge/Installation-info-green)](#installation)
-[![Badge](https://img.shields.io/badge/Analysis-examples-orange)](https://github.com/Izzilab/MatriSpace-analyses)
+[![Badge](https://img.shields.io/badge/Case_study-script-orange)](analyses/breast-case-study/)
 [![Badge](https://img.shields.io/badge/Manuscript-bioRxiv-red)](https://doi.org/xxxxx)
 [![Badge](https://img.shields.io/badge/Release-v1.0-green)](https://github.com/Theayomideo/matrispace-app/releases/tag/v1.0)
 
@@ -40,7 +40,7 @@ MatriSpace is a computational framework designed to identify, quantify, and inte
 
 ## Graphical Abstract
 
-[placeholder]
+![MatriSpace graphical abstract](inst/app/www/graphical_abstract.png)
 
 ## Workflow
 
