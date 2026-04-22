@@ -40,7 +40,7 @@ MatriSpace is a computational framework designed to identify, quantify, and inte
 
 ## Graphical Abstract
 
-![MatriSpace graphical abstract](inst/app/www/graphical_abstract.png)
+![MatriSpace graphical abstract](inst/app/www/graphical_abstract.svg)
 
 ## Workflow
 
