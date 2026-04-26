@@ -4,6 +4,8 @@ FROM rocker/shiny:4.3.3
 RUN apt-get update && apt-get install -y \
     libcurl4-openssl-dev \
     libssl-dev \
+    libgit2-dev \
+    libssh2-1-dev \
     libxml2-dev \
     libfontconfig1-dev \
     libharfbuzz-dev \
@@ -20,6 +22,7 @@ RUN apt-get update && apt-get install -y \
     libmagick++-dev \
     libgsl-dev \
     cmake \
+    git \
     libnlopt-dev \
     libudunits2-dev \
     && rm -rf /var/lib/apt/lists/*
@@ -45,8 +48,12 @@ RUN R -e "BiocManager::install(version = '3.18', ask = FALSE)" && \
 WORKDIR /pkg
 COPY renv.lock renv.lock
 
+# pak struggles to solve this mixed-source lockfile in CI; use renv's native restore.
+ENV RENV_CONFIG_PAK_ENABLED=FALSE
+
 # Restore exact CRAN + GitHub package versions from lockfile
 RUN R -e " \
+  options(renv.config.pak.enabled = FALSE); \
   bioc_pkgs <- c( \
     'Biobase', 'BiocGenerics', 'BiocParallel', 'BiocVersion', \
     'DelayedArray', 'DelayedMatrixStats', 'GenomeInfoDb', 'GenomeInfoDbData', \
