@@ -28,9 +28,10 @@
 
 [![Badge](https://img.shields.io/badge/HuBMAP-U01HG012680-lightgreen)](https://commonfund.nih.gov/HuBMAP)
 [![Badge](https://img.shields.io/badge/IMAT-R21CA261642-lightgreen)](https://www.cancer.gov/about-nci/organization/cssi/research/imat)
-[![Badge](https://img.shields.io/badge/EU-CARES-lightblue)](https://www.cares-eu.org/)
+[![Badge](https://img.shields.io/badge/EU-CARES_HORIZON--MSCA--2022--SE--01--01-lightblue)](https://www.cares-eu.org/)
 [![Badge](https://img.shields.io/badge/CFF-2023--2024-lightblue)](https://syopasaatio.fi/)
 [![Badge](https://img.shields.io/badge/DigiHealth-Oulu_University/Infotech-lightblue)](https://www.oulu.fi/en/research/creating-better-health-our-digital-health-knowhow)
+[![Badge](https://img.shields.io/badge/Sigrid_Jus%C3%A9lius-260193-lightblue)](https://sigridjuselius.fi/)
 
 ## Motivation
 

@@ -884,8 +884,9 @@ page_fillable(
               tags$li(strong("A. Naba:"), " NIH/NHGRI Human Biomolecular Atlas Program (HuBMAP) - Grant U01HG012680"),
               tags$li(strong("A. Naba:"), " NIH/NCI Innovative Molecular Analysis Technologies Program - Grant R21CA261642"),
               tags$li(strong("V. Izzi:"), " Cancer Foundation Finland (2023-2024)"),
-              tags$li(strong("V. Izzi:"), " DigiHealth-project, a strategic profiling project at the University of Oulu, and the Infotech Institute of the University of Oulu"),
-              tags$li(strong("V. Izzi:"), " The European Union CARES project")
+              tags$li(strong("V. Izzi & P. Petrov:"), " DigiHealth-project, a strategic profiling project at the University of Oulu, and the Infotech Institute of the University of Oulu"),
+              tags$li(strong("V. Izzi:"), " The European Union CARES project (HORIZON-MSCA-2022-SE-01-01)"),
+              tags$li(strong("V. Izzi:"), " Sigrid Jusélius Stiftelse (decision 260193)")
             ),
 
             h4("Data resources"),
