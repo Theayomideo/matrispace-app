@@ -8,7 +8,7 @@ Description: An offline, upload-only version of MatriSpace for analysing spatial
     transcriptomics data with focus on matrisome (extracellular matrix) gene analysis.
     Users upload their own Seurat or SpatialExperiment .rds files. All matrisome
     reference data ships bundled with the package.
-License: MIT + file LICENSE
+License: GPL (>= 3)
 Encoding: UTF-8
 Depends:
     R (>= 3.5.0)
