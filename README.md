@@ -15,12 +15,12 @@
 * The online version of MatriSpace, supporting both user uploads and a collection of 198 pre-processed datasets, is available and **ready-to-use** at http://matrinet.shinyapps.io/matrispace
 * This repository contains the **offline version** of MatriSpace for local use with user-uploaded data (no dataset size restrictions). See [Installation](#installation) instructions below.
 * The [`analyses/breast-case-study/`](analyses/breast-case-study/) folder contains the worked example of downstream analysis on MatriSpace output, as used in the manuscript's case study.
-* If you use MatriSpace in your publications, please cite our preprint: **doi** [xxxxx](https://doi.org/xxxxx)
+* If you use MatriSpace in your publications, please cite our preprint: **doi** [10.64898/2026.04.26.720198](https://doi.org/10.64898/2026.04.26.720198)
 
 [![Badge](https://img.shields.io/badge/MatriSpace-Online-blue)](http://matrinet.shinyapps.io/matrispace)
 [![Badge](https://img.shields.io/badge/Installation-info-green)](#installation)
 [![Badge](https://img.shields.io/badge/Case_study-script-orange)](analyses/breast-case-study/)
-[![Badge](https://img.shields.io/badge/Manuscript-bioRxiv-red)](https://doi.org/xxxxx)
+[![Badge](https://img.shields.io/badge/Manuscript-bioRxiv-red)](https://doi.org/10.64898/2026.04.26.720198)
 [![Badge](https://img.shields.io/badge/Release-v1.0-green)](https://github.com/Theayomideo/matrispace-app/releases/tag/v1.0)
 
 * Authors and maintainers: [Izzi Lab](https://www.oulu.fi/en/research-groups/izzi-group) and [Naba Lab for ECM Research](https://naba.lab.uic.edu/) (✉️ <matrisomeproject@gmail.com>)
