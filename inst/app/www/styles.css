@@ -6,6 +6,7 @@
   --color-primary-accent: #4338ca;
   --color-secondary-accent: #0d9488;
   --desktop-app-scale: 0.8;
+  --desktop-app-scale-inverse: 1.25;
 
   --color-background: #f8fafc;
   --color-surface: #ffffff;
@@ -41,6 +42,11 @@ body {
 @media (min-width: 1200px) {
   .app-scale-target {
     zoom: var(--desktop-app-scale);
+  }
+
+  .app-scale-target .plotly.html-widget-output {
+    zoom: var(--desktop-app-scale-inverse);
+    transform-origin: top left;
   }
 }
 
@@ -785,4 +791,135 @@ div.zoom_container {
   color: #ffffff;
   background-color: #0d6efd;
   border-color: #0d6efd;
+}
+
+.card-header.feature-card-header {
+  display: block !important;
+}
+
+.feature-card-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-height: 24px;
+}
+
+.feature-contrast-badge {
+  border-radius: 999px;
+  padding: 0.2rem 0.55rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.feature-contrast-badge.warning {
+  color: #92400e;
+  background: #fef3c7;
+}
+
+.feature-contrast-badge.active {
+  color: #115e59;
+  background: #ccfbf1;
+}
+
+.feature-contrast-slot {
+  height: 82px;
+  margin-top: 0.65rem;
+}
+
+.feature-contrast-placeholder {
+  visibility: hidden;
+}
+
+.feature-contrast-notice {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  height: 100%;
+  padding: 0.6rem 0.75rem;
+  border-left: 3px solid var(--color-info);
+  border-radius: 0.4rem;
+  background: #fffbeb;
+}
+
+.feature-contrast-notice.active {
+  border-left-color: var(--color-secondary-accent);
+  background: #f0fdfa;
+}
+
+.feature-contrast-notice.retained {
+  border-left-color: var(--color-text-secondary);
+  background: var(--color-background);
+}
+
+.feature-contrast-copy {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 0.78rem;
+  line-height: 1.25;
+}
+
+.feature-contrast-copy span {
+  color: var(--color-text-secondary);
+}
+
+.feature-contrast-actions {
+  display: flex;
+  gap: 0.4rem;
+  flex: 0 0 auto;
+}
+
+.feature-contrast-notice .btn {
+  white-space: nowrap;
+}
+
+/* Keep the UCell scale buttons readable without Bootstrap's dark hover fill. */
+.feature-contrast-notice .btn-outline-secondary {
+  color: #115e59;
+  background-color: #ffffff;
+  border-color: #99d6cf;
+  box-shadow: none;
+  transition: background-color 0.12s ease, border-color 0.12s ease;
+}
+
+.feature-contrast-notice .btn-outline-secondary:hover,
+.feature-contrast-notice .btn-outline-secondary:focus,
+.feature-contrast-notice .btn-outline-secondary:active,
+.feature-contrast-notice .btn-outline-secondary.active {
+  color: #115e59;
+  background-color: #f0fdfa;
+  border-color: #0d9488;
+  box-shadow: none;
+}
+
+.feature-contrast-notice .btn-outline-secondary:focus-visible {
+  outline: 2px solid #0d9488;
+  outline-offset: 2px;
+}
+
+@media (max-width: 1199px) {
+  .feature-contrast-slot {
+    height: 112px;
+    min-height: 112px;
+  }
+
+  .feature-contrast-notice {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .feature-contrast-copy {
+    width: 100%;
+  }
+}
+
+@media (max-width: 575px) {
+  .feature-contrast-slot {
+    height: auto;
+  }
 }

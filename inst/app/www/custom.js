@@ -6,6 +6,7 @@ $(document).ready(function() {
   $(document).on('shiny:connected', function(event) {
     setTimeout(initializeCards, 100);
     initializeAllD3Visualizers();
+    schedulePlotlyGeometryRefresh();
   });
 
   if ($('#sel1').length > 0) { setTimeout(initializeCards, 100); }
@@ -41,6 +42,15 @@ $(document).ready(function() {
   $('#sel1 input').change(syncSel1Cards);
   $('#sel2 input').change(syncSel2Cards);
 
+  $(document).on('shown.bs.tab shown.bs.collapse', schedulePlotlyGeometryRefresh);
+  $(document).on('change', '.form-switch input, input[id^="toggle_"]', schedulePlotlyGeometryRefresh);
+  $(document).on('shiny:value', function(event) {
+    if ($(event.target).find('.js-plotly-plot').length || $(event.target).hasClass('plotly')) {
+      schedulePlotlyGeometryRefresh();
+    }
+  });
+  $(window).on('resize', schedulePlotlyGeometryRefresh);
+
   $(document).on('click', '.flip-card', function(event) { $(this).find('.flip-card-inner').toggleClass('is-flipped'); });
 
   $(document).on('click', '.accordion-button', function() {
@@ -54,6 +64,29 @@ $(document).ready(function() {
     Shiny.setInputValue('active_panel', panelName, { priority: "event" });
   });
 });
+
+/* --- Plotly Geometry Repair --- */
+
+function refreshVisiblePlotlyGeometry() {
+  if (!window.Plotly || !window.Plotly.Plots) return;
+
+  $('.js-plotly-plot:visible').each(function() {
+    const graphDiv = this;
+    if (graphDiv.getClientRects().length === 0) return;
+
+    try {
+      Plotly.Plots.resize(graphDiv);
+    } catch (error) {
+      // Plotly can briefly reject resize calls while Shiny is rebinding output.
+    }
+  });
+}
+
+function schedulePlotlyGeometryRefresh() {
+  [0, 50, 150, 300, 600].forEach(function(delay) {
+    window.setTimeout(refreshVisiblePlotlyGeometry, delay);
+  });
+}
 
 /* --- D3 Visualization --- */
 

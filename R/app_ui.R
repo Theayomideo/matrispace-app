@@ -82,8 +82,12 @@ page_fillable(
         p(
           style = "font-size: 0.85rem; font-style: italic; margin-bottom: 0.75rem;",
           "If you use MatriSpace in your publication, please cite our ",
-          tags$span("manuscript", style = "color: var(--color-primary-accent); font-weight: 500;"),
-          " (coming soon)"
+          tags$a(
+            href = "https://www.biorxiv.org/content/10.64898/2026.04.26.720198v1",
+            target = "_blank",
+            "manuscript",
+            style = "color: var(--color-primary-accent); font-weight: 500; text-decoration: none;"
+          )
         ),
         p(
           class = "d-flex align-items-center justify-content-start",
@@ -135,6 +139,50 @@ page_fillable(
             actionButton("load_upload", "Load Object",
                          icon = icon("upload"),
                          class = "btn-primary w-100")
+          ),
+
+          tags$hr(style = "margin: 1rem 0 0.5rem 0;"),
+          div(
+            class = "mb-2",
+            tags$span(
+              style = "font-size: 0.85rem; font-weight: 600;",
+              "Spot leakage correction",
+              bslib::tooltip(
+                bsicons::bs_icon("info-circle", class = "ms-1"),
+                HTML(paste0(
+                  "<b>SpotClean-style bleed correction.</b> Array-based assays can leak ",
+                  "transcripts laterally between capture spots. When enabled, MatriSpace ",
+                  "subtracts a fraction &alpha; of each spot's local neighbour mean, ",
+                  "floored at zero.<br><br>",
+                  "Correction is scoped to the selected features when an analysis runs. ",
+                  "Changing this setting clears existing results."
+                )),
+                placement = "right",
+                options = list(customClass = "matrispace-tooltip")
+              )
+            )
+          ),
+          input_switch(
+            id = "leak_correct",
+            label = "Correct spot-to-spot leakage",
+            value = FALSE
+          ),
+          conditionalPanel(
+            "input.leak_correct == true",
+            div(
+              style = "margin-top: 8px;",
+              sliderInput(
+                "leak_alpha", "Leakage coefficient (α)",
+                min = 0.02, max = 0.30, value = 0.10, step = 0.01,
+                width = "100%", ticks = FALSE
+              ),
+              sliderInput(
+                "leak_k", "Neighbours per spot (k)",
+                min = 4, max = 12, value = 6, step = 1,
+                width = "100%", ticks = FALSE
+              ),
+              div(class = "small text-muted", uiOutput("leak_status"))
+            )
           )
 
         ),
@@ -303,7 +351,10 @@ page_fillable(
               class = "d-flex align-items-center justify-content-between"
             ),
             card_body(
-              plotOutput("tissue_image_plot")
+              shinycssloaders::withSpinner(
+                plotOutput("tissue_image_plot"),
+                type = 8, color = "#0d6efd"
+              )
             )
           ),
 
@@ -317,7 +368,10 @@ page_fillable(
 
             ),
             card_body(
-              plotOutput("cluster_plot")
+              shinycssloaders::withSpinner(
+                plotOutput("cluster_plot"),
+                type = 8, color = "#0d6efd"
+              )
             )
           )
         )
@@ -512,6 +566,7 @@ page_fillable(
 
           nav_panel(
             "ECM niches",
+            uiOutput("ecm_annotation_status"),
             interactive_spatial_viewer_ui(
               id_prefix = "ecm",
               title = "ECM niche annotations",
@@ -601,13 +656,13 @@ page_fillable(
               full_screen = TRUE,
               card_header(
                 span(
-                  "Spatial LR co-expression analysis",
+                  "Matrisome pair co-expression",
                   bslib::tooltip(
                     bsicons::bs_icon("info-circle", class = "ms-1"),
                     HTML(paste(
-                      "This analysis scores potential signaling pathways by measuring the co-expression of an ECM ligand in one spot and its corresponding receptor in neighboring spots.<br><br>",
-                      "&bull; <b>Heatmap:</b> Displays the top enriched LR 'axes' (ligand-receptor pairs) across all annotated niches, providing a high-level overview of the most active communication patterns.<br>",
-                      "&bull; <b>Volcano Plot:</b> Provides a detailed view of all LR pairs for a selected niche, highlighting which pairs are the most significantly enriched in that specific environment."
+                      "Measures spatial co-expression of gene pairs from MatriComDB in which at least one member is a matrisome gene. Pair scores combine the expression of the two genes across adjacent spatial spots.<br><br>",
+                      "&bull; <b>Heatmap:</b> Shows the top enriched pairs across ECM niches.<br>",
+                      "&bull; <b>Volcano plot:</b> Shows pair enrichment within the selected ECM niche."
                     )),
                     options = list(customClass = "matrispace-tooltip")
                   )
@@ -637,7 +692,7 @@ page_fillable(
                     # Disabled during analysis via shinyjs (see server.R observeEvent)
                     actionButton(
                       "run_lr_analysis",
-                      "Calculate LR Scores",
+                      "Calculate pair scores",
                       icon = icon("cogs"),
                       class = "btn-primary w-100 mt-3"
                     )
@@ -649,7 +704,7 @@ page_fillable(
 
                     # Left: Heatmap showing top enriched L-R axes across ALL niches
                     card(
-                      card_header("Top enriched LR axes"),
+                      card_header("Top enriched matrisome pairs"),
                       card_body(
                         shinycssloaders::withSpinner(  # Loading indicator during rendering
                           plotOutput("lr_heatmap_plot", height = "600px")
@@ -659,7 +714,7 @@ page_fillable(
 
                     # Right: Volcano plot for SELECTED niche (from dropdown)
                     card(
-                      card_header("Interaction volcano plot"),
+                      card_header("Matrisome pair volcano plot"),
                       card_body(
                         shinycssloaders::withSpinner(
                           plotOutput("lr_volcano_plot", height = "600px")
@@ -738,18 +793,23 @@ page_fillable(
               card(
                 full_screen = FALSE,
                 card_header(
-                  span(
-                    "Primary feature",
-                    bslib::tooltip(
-                      bs_icon("info-circle", class = "ms-1"),
-                      HTML(paste(
-                        "A spatial plot that pinpoints exactly where your selected feature is expressed in the tissue.<br><br>",
-                        "Spots are coloured from blue (low expression) to red (high expression), allowing the visualization of potential correlation in feature expression patterns across different regions. Hover over spots to see their precise value."
-                      )),
-                      options = list(customClass = "matrispace-tooltip")
-                    )
+                  div(
+                    class = "feature-card-title-row",
+                    span(
+                      "Primary feature",
+                      bslib::tooltip(
+                        bs_icon("info-circle", class = "ms-1"),
+                        HTML(paste(
+                          "A spatial plot that pinpoints exactly where your selected feature is expressed in the tissue.<br><br>",
+                          "Spots are coloured from blue (low expression) to red (high expression), allowing the visualization of potential correlation in feature expression patterns across different regions. Hover over spots to see their precise value."
+                        )),
+                        options = list(customClass = "matrispace-tooltip")
+                      )
+                    ),
+                    uiOutput("primary_contrast_badge", inline = TRUE)
                   ),
-                  class = "d-flex align-items-center justify-content-between",
+                  uiOutput("primary_contrast_notice"),
+                  class = "feature-card-header"
                 ),
                 card_body(
                   style = "min-height: 500px;",
@@ -765,18 +825,23 @@ page_fillable(
               card(
                 full_screen = FALSE,
                 card_header(
-                  span(
-                    "Secondary feature",
-                    bslib::tooltip(
-                      bs_icon("info-circle", class = "ms-1"),
-                      HTML(paste(
-                        "A spatial plot that pinpoints exactly where your selected feature is active in the tissue.<br><br>",
-                        "Spots are coloured from blue (low expression) to red (high expression), allowing the visualization of potential correlation in feature expression patterns across different regions. Hover over spots to see their precise value."
-                      )),
-                      options = list(customClass = "matrispace-tooltip")
-                    )
+                  div(
+                    class = "feature-card-title-row",
+                    span(
+                      "Secondary feature",
+                      bslib::tooltip(
+                        bs_icon("info-circle", class = "ms-1"),
+                        HTML(paste(
+                          "A spatial plot that pinpoints exactly where your selected feature is active in the tissue.<br><br>",
+                          "Spots are coloured from blue (low expression) to red (high expression), allowing the visualization of potential correlation in feature expression patterns across different regions. Hover over spots to see their precise value."
+                        )),
+                        options = list(customClass = "matrispace-tooltip")
+                      )
+                    ),
+                    uiOutput("secondary_contrast_badge", inline = TRUE)
                   ),
-                  class = "d-flex align-items-center justify-content-between",
+                  uiOutput("secondary_contrast_notice"),
+                  class = "feature-card-header"
                 ),
                 card_body(
                   style = "min-height: 500px;",

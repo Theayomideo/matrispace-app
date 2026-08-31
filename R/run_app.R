@@ -6,6 +6,9 @@
 #'   See `?golem::get_golem_options` for more details.
 #' @export
 run_app <- function(host = "127.0.0.1", port = NULL, ...) {
+  # Preserve a full reactive traceback in deployment logs.
+  options(shiny.error = function() utils::traceback(3))
+
   # Set 15GB upload limit
   options(shiny.maxRequestSize = 15000 * 1024^2)
 

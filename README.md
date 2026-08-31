@@ -12,12 +12,12 @@
 ---
 
 * MatriSpace features an intuitive graphical user interface implemented in R Shiny.
-* The online version of MatriSpace, supporting both user uploads and a collection of 198 pre-processed datasets, is available and **ready-to-use** at http://matrinet.shinyapps.io/matrispace
+* The online version of MatriSpace, supporting both user uploads and a collection of 240 pre-processed datasets, is available and **ready-to-use** at https://izzilab-matrispace.share.connect.posit.cloud/
 * This repository contains the **offline version** of MatriSpace for local use with user-uploaded data (no dataset size restrictions). See [Installation](#installation) instructions below.
 * The [`analyses/breast-case-study/`](analyses/breast-case-study/) folder contains the worked example of downstream analysis on MatriSpace output, as used in the manuscript's case study.
 * If you use MatriSpace in your publications, please cite our preprint: **doi** [10.64898/2026.04.26.720198](https://doi.org/10.64898/2026.04.26.720198)
 
-[![Badge](https://img.shields.io/badge/MatriSpace-Online-blue)](http://matrinet.shinyapps.io/matrispace)
+[![Badge](https://img.shields.io/badge/MatriSpace-Online-blue)](https://izzilab-matrispace.share.connect.posit.cloud/)
 [![Badge](https://img.shields.io/badge/Installation-info-green)](#installation)
 [![Badge](https://img.shields.io/badge/Case_study-script-orange)](analyses/breast-case-study/)
 [![Badge](https://img.shields.io/badge/Manuscript-bioRxiv-red)](https://doi.org/10.64898/2026.04.26.720198)
@@ -51,7 +51,7 @@ MatriSpace operates through three analytical stages: **Data Input**, **Matrisome
 
 MatriSpace accepts Seurat objects (`.rds`) or SpatialExperiment objects (`.rds`), ensuring compatibility with both Seurat and Bioconductor ecosystems. Upon loading, uploaded datasets undergo automated preprocessing including gene symbol standardization, matrisome gene set scoring, and ECM niche classification.
 
-The [online version](http://matrinet.shinyapps.io/matrispace) supports both user uploads (up to 1 GB) and a curated collection of 198 pre-processed 10x Visium datasets from public repositories (10x Genomics, HTAN, GEO, Zenodo), spanning 12 cancer types (n = 180 samples) and 10 healthy organ systems (n = 18 samples).
+The [online version](https://izzilab-matrispace.share.connect.posit.cloud/) supports both user uploads and a curated collection of 240 pre-processed 10x Visium datasets from public repositories (10x Genomics, HTAN, GEO, Zenodo), including cancer samples (n = 180) and healthy tissues (n = 60).
 
 ### Matrisome Profiling
 
@@ -71,7 +71,7 @@ All results are exportable as plots and tables, and processed Seurat objects can
 
 ## Installation
 
-MatriSpace is distributed as a Docker image and an R package. The offline version supports user-uploaded data only; the pre-processed dataset collection is available exclusively through the [online version](http://matrinet.shinyapps.io/matrispace).
+MatriSpace is distributed as a Docker image and an R package. The offline version supports user-uploaded data only; the pre-processed dataset collection is available exclusively through the [online version](https://izzilab-matrispace.share.connect.posit.cloud/).
 
 ### Docker (recommended)
 

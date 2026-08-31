@@ -1,6 +1,21 @@
 # helpers.R
 # This file contains all helper functions used in the server logic.
 
+#' Drop SCT scale.data, reductions, and graphs from a Seurat object before
+#' storing in rv$active_seurat_object. scale.data is the biggest RAM offender
+#' post-ScType. Returns the original object unchanged if DietSeurat throws.
+slim_seurat_for_app <- function(obj) {
+  if (!inherits(obj, "Seurat")) return(obj)
+  tryCatch({
+    Seurat::DietSeurat(obj, layers = c("counts", "data"),
+               dimreducs = character(0), graphs = character(0))
+  }, error = function(e) {
+    warning(sprintf("slim_seurat_for_app: DietSeurat failed (%s); keeping full object.",
+                    conditionMessage(e)))
+    obj
+  })
+}
+
 #' Safe assay data accessor for Seurat v4/v5 compatibility
 #'
 #' @param object A Seurat object
@@ -91,16 +106,49 @@ safe_get_rownames <- function(object, assay = NULL) {
 #'
 #' @param seurat_obj A Seurat object
 #' @return Seurat object with updated gene symbols
-standardize_gene_symbols <- function(seurat_obj) {
+#' Update gene symbols against a bundled HGNC long-format table
+#'
+#' Offline replacement for scCustomize::Updated_HGNC_Symbols. Looks up each
+#' input symbol in the HGNC table built by scripts/build_hgnc_table.R: if
+#' it's already an approved current symbol it stays, if it matches a
+#' previous symbol it gets renamed to the current one, otherwise it stays.
+#'
+#' @param genes Character vector of gene symbols.
+#' @param hgnc_long_data Data frame with columns "symbol" and "prev_symbol".
+#' @return Data frame with input_features and Output_Features (same shape as
+#'   scCustomize::Updated_HGNC_Symbols), so callers can swap in directly.
+update_hgnc_symbols <- function(genes, hgnc_long_data) {
+  approved <- unique(hgnc_long_data$symbol)
+  # Map prev_symbol -> current symbol; drop rows where prev is itself an
+  # approved symbol so we never demote a current name.
+  rename_tbl <- hgnc_long_data[!hgnc_long_data$prev_symbol %in% approved, , drop = FALSE]
+  rename_map <- setNames(rename_tbl$symbol, rename_tbl$prev_symbol)
+  rename_map <- rename_map[!duplicated(names(rename_map))]
+
+  output <- ifelse(
+    genes %in% approved,
+    genes,
+    ifelse(genes %in% names(rename_map), unname(rename_map[genes]), genes)
+  )
+
+  data.frame(
+    input_features = genes,
+    Output_Features = output,
+    stringsAsFactors = FALSE
+  )
+}
+
+standardize_gene_symbols <- function(
+  seurat_obj,
+  hgnc_long_data = readRDS(extdata_path("hgnc_long_data.rds"))
+) {
   # Collect all unique features across every assay
   all_features <- unique(unlist(lapply(SeuratObject::Assays(seurat_obj), function(a) {
     rownames(seurat_obj[[a]])
   })))
 
-  # Get HGNC mapping (returns a data frame)
-  map_df <- suppressWarnings(
-    scCustomize::Updated_HGNC_Symbols(all_features, verbose = FALSE, case_check_as_warn = TRUE)
-  )
+  # Get HGNC mapping using the bundled offline table.
+  map_df <- update_hgnc_symbols(all_features, hgnc_long_data)
 
   changed_idx <- which(map_df$input_features != map_df$Output_Features)
   if (length(changed_idx) == 0) {
@@ -189,10 +237,69 @@ safe_get_nfeatures <- function(object, assay = NULL) {
 
 #' Combine spatial coordinates with metadata for plotting.
 prepare_data_plot <- function(obj) {
-  spot_coords <- GetTissueCoordinates(obj)
+  spot_coords <- align_spatial_coordinates(obj)
   metadata <- obj@meta.data
+  metadata <- metadata[rownames(spot_coords), , drop = FALSE]
   data_plot <- cbind(spot_coords, metadata)
   data_plot
+}
+
+#' Align a named vector to Seurat cell order when names are available.
+align_to_cells <- function(values, cells) {
+  if (!is.null(names(values)) && all(cells %in% names(values))) {
+    values <- values[cells]
+  }
+  values
+}
+
+#' Return spatial coordinates in the requested Seurat cell order.
+align_spatial_coordinates <- function(obj, coords = NULL, cells = NULL) {
+  if (is.null(coords)) coords <- GetTissueCoordinates(obj)
+  coords <- as.data.frame(coords)
+  if (is.null(cells)) cells <- rownames(obj@meta.data)
+
+  coord_cells <- rownames(coords)
+  if ((is.null(coord_cells) || anyNA(coord_cells) || any(!nzchar(coord_cells))) &&
+      "cell" %in% colnames(coords)) {
+    coord_cells <- as.character(coords$cell)
+  }
+  if ((is.null(coord_cells) || anyNA(coord_cells) || any(!nzchar(coord_cells))) &&
+      "barcode" %in% colnames(coords)) {
+    coord_cells <- as.character(coords$barcode)
+  }
+
+  if (!is.null(coord_cells) && length(coord_cells) == nrow(coords) &&
+      !anyNA(coord_cells) && all(nzchar(coord_cells))) {
+    rownames(coords) <- make.unique(coord_cells)
+    if (all(cells %in% rownames(coords))) {
+      coords <- coords[cells, , drop = FALSE]
+    } else {
+      common_cells <- intersect(cells, rownames(coords))
+      if (length(common_cells) > 0) {
+        coords <- coords[common_cells, , drop = FALSE]
+      }
+    }
+  }
+
+  if (!all(c("row", "col") %in% names(coords))) {
+    if (length(obj@images) > 0 && "coordinates" %in% slotNames(obj@images[[1]])) {
+      raw_coords <- obj@images[[1]]@coordinates
+      raw_coords <- align_spatial_coordinates(obj, raw_coords, rownames(coords))
+      coords$row <- raw_coords$row
+      coords$col <- raw_coords$col
+    } else if (all(c("x", "y") %in% names(coords))) {
+      coords$row <- coords$y
+      coords$col <- coords$x
+    }
+  }
+
+  if (!all(c("imagerow", "imagecol") %in% names(coords)) &&
+      all(c("x", "y") %in% names(coords))) {
+    coords$imagerow <- coords$x
+    coords$imagecol <- coords$y
+  }
+
+  coords
 }
 
 #' Convert VisiumV2 images to VisiumV1 format for compatibility
@@ -378,98 +485,223 @@ convert_visiumv2_to_v1 <- function(obj, verbose = TRUE) {
   obj
 }
 
+#' Return detected canonical matrisome genes.
+available_matrisome_genes <- function(obj, matrisome_genes) {
+  object_genes <- safe_get_rownames(obj, assay = DefaultAssay(obj))
+  sort(unique(intersect(object_genes, matrisome_genes)))
+}
+
+#' Detect custom UCell scores with limited colour contrast.
+diagnose_ucell_contrast <- function(scores, upper_cutoff = 0.95,
+                                    min_upper_fraction = 0.40, max_iqr = 0.075) {
+  values <- as.numeric(scores)
+  values <- values[is.finite(values)]
+  upper_fraction <- if (length(values) > 0) mean(values >= upper_cutoff) else NA_real_
+  score_iqr <- if (length(values) > 0) unname(stats::IQR(values)) else NA_real_
+  has_variation <- length(unique(values)) > 1
+
+  list(
+    flagged = isTRUE(has_variation && upper_fraction >= min_upper_fraction && score_iqr <= max_iqr),
+    upper_fraction = upper_fraction,
+    iqr = score_iqr,
+    upper_cutoff = upper_cutoff
+  )
+}
+
+#' Convert UCell scores to within-tissue percentiles for display.
+ucell_relative_contrast <- function(scores) {
+  values <- as.numeric(scores)
+  result <- rep(NA_real_, length(values))
+  names(result) <- names(scores)
+  keep <- is.finite(values)
+  if (sum(keep) < 2 || length(unique(values[keep])) < 2) {
+    result[keep] <- 0.5
+    return(result)
+  }
+  result[keep] <- (base::rank(values[keep], ties.method = "average") - 1) / (sum(keep) - 1)
+  result
+}
+
+#' Score custom matrisome gene lists with UCell.
+score_custom_gene_sets <- function(obj, signatures) {
+  assay <- DefaultAssay(obj)
+  requested_genes <- unique(unlist(signatures))
+  layer <- "data"
+  expression <- safe_get_assay_data(obj, assay = assay, slot = layer)
+
+  if (is.null(expression) || nrow(expression) == 0 ||
+      !all(requested_genes %in% rownames(expression))) {
+    layer <- "counts"
+    expression <- safe_get_assay_data(obj, assay = assay, slot = layer)
+  }
+  if (is.null(expression) || nrow(expression) == 0) {
+    stop("Could not retrieve expression data for custom matrisome scoring.")
+  }
+
+  missing_genes <- setdiff(requested_genes, rownames(expression))
+  if (length(missing_genes) > 0) {
+    stop("The custom matrisome list contains genes not found in the active assay.")
+  }
+
+  scores <- as.data.frame(
+    UCell::ScoreSignatures_UCell(
+      expression,
+      features = signatures,
+      BPPARAM = BiocParallel::SerialParam()
+    ),
+    check.names = FALSE
+  )
+  cells <- rownames(obj@meta.data)
+  score_columns <- paste0(names(signatures), "_UCell")
+
+  if (!all(score_columns %in% colnames(scores)) ||
+      is.null(rownames(scores)) || !all(cells %in% rownames(scores))) {
+    stop("Custom matrisome scores could not be aligned to all spots.")
+  }
+
+  scores <- scores[cells, score_columns, drop = FALSE]
+  colnames(scores) <- names(signatures)
+  if (any(!is.finite(as.matrix(scores)))) {
+    stop("Custom matrisome scoring returned non-finite values.")
+  }
+
+  diagnostics <- lapply(names(signatures), function(id) {
+    diagnose_ucell_contrast(scores[[id]])
+  })
+  names(diagnostics) <- names(signatures)
+
+  contrast_scores <- lapply(names(signatures), function(id) {
+    if (!diagnostics[[id]]$flagged) return(NULL)
+    values <- scores[[id]]
+    names(values) <- rownames(scores)
+    ucell_relative_contrast(values)
+  })
+  names(contrast_scores) <- names(signatures)
+
+  list(
+    scores = scores,
+    assay = assay,
+    layer = layer,
+    diagnostics = diagnostics,
+    contrast_scores = contrast_scores
+  )
+}
+
 #' Add feature analysis results and LISA statistics to Seurat object.
-addfeat <- function(obj, feat1, sel1, feat2, sel2) {
+addfeat <- function(obj, feat1, sel1, feat2, sel2,
+                    feature1_values = NULL, feature2_values = NULL) {
+  # Coerce character(0) inputs (from un-selected radio buttons) to length-1
+  # strings so downstream `||` chains don't blow up on logical(0).
+  norm_str <- function(x, default = "") {
+    if (is.null(x) || length(x) == 0) return(default)
+    x <- as.character(x)[[1L]]
+    if (is.na(x)) return(default)
+    x
+  }
+  feat1 <- norm_str(feat1, "")
+  sel1  <- norm_str(sel1,  "")
+  feat2 <- norm_str(feat2, "")
+  sel2  <- norm_str(sel2,  "none")
+
   m <- obj@meta.data
 
   # Handle primary feature (feature1)
-  if (feat1 == "") {
+  if (!is.null(feature1_values)) {
+    m$feature1 <- align_to_cells(feature1_values, rownames(m))
+    if (length(m$feature1) != nrow(m)) stop("Primary custom score length does not match the object.")
+  } else if (!nzchar(feat1)) {
     m$feature1 <- 0
-  } else if (sel1 == "matrisome gene" || sel1 == "any gene") {
+  } else if (identical(sel1, "matrisome gene") || identical(sel1, "any gene")) {
     feature1_data <- safe_get_assay_data(obj)
     if (!is.null(feature1_data) && feat1 %in% rownames(feature1_data)) {
-      m$feature1 <- feature1_data[feat1, ]
+      m$feature1 <- align_to_cells(feature1_data[feat1, ], rownames(m))
     } else {
       warning("Could not retrieve data for feature1")
       m$feature1 <- 0
     }
-  } else if (sel1 == "matrisome signature") {
+  } else if (identical(sel1, "matrisome signature")) {
     if (feat1 %in% colnames(obj@meta.data)) {
       m$feature1 <- obj@meta.data[, feat1]
     } else {
       m$feature1 <- 0
     }
+  } else {
+    m$feature1 <- 0
   }
 
   # Handle secondary feature (feature2)
-  if (is.null(sel2) || feat2 == "" || sel2 == "none") {
+  if (!is.null(feature2_values)) {
+    m$feature2 <- align_to_cells(feature2_values, rownames(m))
+    if (length(m$feature2) != nrow(m)) stop("Secondary custom score length does not match the object.")
+  } else if (!nzchar(feat2) || identical(sel2, "none")) {
     m$feature2 <- 0
-  } else if (sel2 == "matrisome gene" || sel2 == "any gene") {
+  } else if (identical(sel2, "matrisome gene") || identical(sel2, "any gene")) {
     feature2_data <- safe_get_assay_data(obj)
     if (!is.null(feature2_data) && feat2 %in% rownames(feature2_data)) {
-      m$feature2 <- feature2_data[feat2, ]
+      m$feature2 <- align_to_cells(feature2_data[feat2, ], rownames(m))
     } else {
       warning("Could not retrieve data for feature2")
       m$feature2 <- 0
     }
-  } else if (sel2 == "matrisome signature") {
+  } else if (identical(sel2, "matrisome signature")) {
     if (feat2 %in% colnames(obj@meta.data)) {
       m$feature2 <- obj@meta.data[, feat2]
     } else {
       m$feature2 <- 0
     }
+  } else {
+    m$feature2 <- 0
   }
 
   # Get spatial coordinates using GetTissueCoordinates for consistency
-  coords <- GetTissueCoordinates(obj)
-  if (!all(c("row", "col") %in% names(coords))) {
-    # Handle VisiumV1 vs VisiumV2 coordinate structures
-    if ("coordinates" %in% slotNames(obj@images[[1]])) {
-      raw_coords <- obj@images[[1]]@coordinates
-      coords$row <- raw_coords$row
-      coords$col <- raw_coords$col
-    } else {
-      # VisiumV2: use x/y as fallback
-      coords$row <- coords$y
-      coords$col <- coords$x
-    }
-  }
-  # Ensure imagerow/imagecol always exist (needed for downstream plotting/export)
-  if (!all(c("imagerow", "imagecol") %in% names(coords))) {
-    coords$imagerow <- coords$x
-    coords$imagecol <- coords$y
-  }
-  m <- cbind(m, coords)
+  coords <- align_spatial_coordinates(obj, cells = rownames(m))
+  m <- m[rownames(coords), , drop = FALSE]
+  coord_cols <- intersect(c("row", "col", "imagerow", "imagecol"), colnames(coords))
+  m[coord_cols] <- coords[coord_cols]
 
   # Clean up negative values
   m$feature1[m$feature1 < 0] <- 0
   m$feature2[m$feature2 < 0] <- 0
 
-  # MODIFIED & IMPROVED LISA CALCULATION
-  # Only run if a secondary feature is present and has variance
-  if (!is.null(sel2) && sel2 != "none" && feat2 != "" && var(m$feature2, na.rm = TRUE) > 0) {
-    # Calculate LISA statistics
-    Wij <- as.matrix(dist(as.matrix(cbind(m$row, m$col))))
-    Wij[Wij == 0] <- 1e-9
-    Wij <- 1 / Wij
-    diag(Wij) <- 0
-    if (sum(Wij) > 0) Wij <- Wij / sum(Wij)
-    diag(Wij) <- 0
+  # Sparse LISA: dense n*n weight matrix OOMs the worker past ~5k spots.
+  # The labels only depend on the sign of the spatial lag, so a sparse k-NN
+  # adjacency gives identical High/Low quadrants at O(n*k) memory.
+  run_lisa <- !identical(sel2, "none") && nzchar(feat2) &&
+              isTRUE(var(m$feature2, na.rm = TRUE) > 0)
 
-    # Standardize features (Z-score)
-    x <- m$feature1
-    y <- m$feature2
+  if (run_lisa) {
+    lisa_result <- tryCatch({
+      # Pixel coords (imagerow/imagecol), not array indices: uploaded objects
+      # can have character-typed or collinear row/col after VisiumV2->V1
+      # fallback, which degenerates MERINGUE's Delaunay step.
+      coords_df <- data.frame(x = as.numeric(m$imagerow), y = as.numeric(m$imagecol))
+      Wij <- MERINGUE::getSpatialNeighbors(coords_df, filterDist = NA)
 
-    x_scaled <- if(sd(x, na.rm = TRUE) > 0) as.numeric(scale(x)) else rep(0, length(x))
-    y_scaled <- if(sd(y, na.rm = TRUE) > 0) as.numeric(scale(y)) else rep(0, length(y))
-    x_scaled[is.na(x_scaled)] <- 0
-    y_scaled[is.na(y_scaled)] <- 0
+      rs <- Matrix::rowSums(Wij)
+      rs[rs == 0] <- 1
+      Wij <- Wij / rs
 
-    # Calculate LISA clustering
-    lisa.clust <- as.character(interaction(x_scaled > 0, Wij %*% y_scaled > 0))
-    lisa.clust <- gsub("TRUE", "High", lisa.clust)
-    lisa.clust <- gsub("FALSE", "Low", lisa.clust)
-    m$LISA <- lisa.clust
+      x <- m$feature1
+      y <- m$feature2
+      x_scaled <- if (isTRUE(sd(x, na.rm = TRUE) > 0)) as.numeric(scale(x)) else rep(0, length(x))
+      y_scaled <- if (isTRUE(sd(y, na.rm = TRUE) > 0)) as.numeric(scale(y)) else rep(0, length(y))
+      x_scaled[is.na(x_scaled)] <- 0
+      y_scaled[is.na(y_scaled)] <- 0
+
+      lag_y <- as.numeric(Wij %*% y_scaled)
+
+      # Dot-joined labels ("High.High", "Low.High") match the legacy
+      # interaction() output that downstream plotting depends on.
+      x_lab <- ifelse(x_scaled > 0, "High", "Low")
+      y_lab <- ifelse(lag_y    > 0, "High", "Low")
+      paste(x_lab, y_lab, sep = ".")
+    }, error = function(e) {
+      warning(sprintf("LISA calculation failed (%s); falling back to 'not.applicable'.",
+                      conditionMessage(e)))
+      NULL
+    })
+
+    m$LISA <- if (is.null(lisa_result)) "not.applicable" else lisa_result
   } else {
     m$LISA <- "not.applicable"
   }
@@ -487,11 +719,16 @@ addfeat <- function(obj, feat1, sel1, feat2, sel2) {
 #' @param name Name for the output score column
 #' @param counts_matrix Pre-fetched expression matrix
 #' @return Named list with robust_score, log_scaled_score, and gene_count
-process_matrisome_expression <- function(gene_list, seurat_obj, name, counts_matrix, matrisome) {
-  # Use the pre-fetched counts matrix passed as argument
+process_matrisome_expression <- function(
+  gene_list, seurat_obj, name, counts_matrix, matrisome
+) {
   counts <- counts_matrix
+  if (is.null(counts) || nrow(counts) == 0 || ncol(counts) == 0) {
+    warning(paste("No counts matrix available for", name))
+    return(NULL)
+  }
 
-  available_genes <- c()
+  available_genes <- character(0)
 
   # For each gene, check primary name first, then synonyms if needed
   for(gene in gene_list) {
@@ -518,15 +755,29 @@ process_matrisome_expression <- function(gene_list, seurat_obj, name, counts_mat
   }
 
   # Get spot coordinates
-  coords <- GetTissueCoordinates(seurat_obj)
+  coords <- align_spatial_coordinates(seurat_obj)
 
-  # Calculate metrics
-  base_counts <- colSums(counts[available_genes, , drop = FALSE])
-  log_scaled <- {
-    sums_log <- log1p(base_counts)
-    (sums_log - min(sums_log)) / (max(sums_log) - min(sums_log))
+  # Matrix::colSums keeps the sparse path and avoids densifying dgCMatrix.
+  base_counts <- Matrix::colSums(counts[available_genes, , drop = FALSE])
+  base_counts <- align_to_cells(base_counts, rownames(coords))
+
+  # Guard the degenerate min==max case so downstream colorRamp doesn't NaN.
+  sums_log  <- log1p(base_counts)
+  sl_min    <- min(sums_log, na.rm = TRUE)
+  sl_max    <- max(sums_log, na.rm = TRUE)
+  log_scaled <- if (isTRUE(sl_max > sl_min)) (sums_log - sl_min) / (sl_max - sl_min)
+                else rep(0, length(sums_log))
+
+  # IQR can be 0 when >50% of spots have zero counts for a small gene list.
+  iqr_val <- IQR(base_counts, na.rm = TRUE)
+  robust  <- if (isTRUE(iqr_val > 0)) (base_counts - median(base_counts, na.rm = TRUE)) / iqr_val
+             else rep(0, length(base_counts))
+  coord_rows <- if (!is.null(names(base_counts)) &&
+                    all(names(base_counts) %in% rownames(coords))) {
+    names(base_counts)
+  } else {
+    seq_len(min(length(base_counts), nrow(coords)))
   }
-  robust <- (base_counts - median(base_counts)) / IQR(base_counts)
 
   # Create data frame - handle VisiumV1 vs VisiumV2 coordinate structures
   if (all(c("imagerow", "imagecol") %in% colnames(coords))) {
@@ -535,8 +786,8 @@ process_matrisome_expression <- function(gene_list, seurat_obj, name, counts_mat
       base_counts = base_counts,
       log_scaled = log_scaled,
       robust = robust,
-      imagerow = coords$imagerow,
-      imagecol = coords$imagecol
+      imagerow = coords[coord_rows, "imagerow"],
+      imagecol = coords[coord_rows, "imagecol"]
     )
   } else {
     # VisiumV2: use x/y as fallback
@@ -545,16 +796,20 @@ process_matrisome_expression <- function(gene_list, seurat_obj, name, counts_mat
       base_counts = base_counts,
       log_scaled = log_scaled,
       robust = robust,
-      imagerow = coords$x,
-      imagecol = coords$y
+      imagerow = coords[coord_rows, "x"],
+      imagecol = coords[coord_rows, "y"]
     )
   }
   return(df)
 }
 
 
-#' Generate spatial plots for matrisome categories.
-create_matrisome_plots <- function(seurat_obj, display_name, internal_name, type, annotation_col) {
+#' Compute per-category matrisome plot data (no plotly objects).
+#' Plot construction is deferred to build_matrisome_plotly() at render time
+#' so only the visible category materializes plotly objects.
+#' Pass coords_cache to avoid re-running GetTissueCoordinates per call.
+compute_matrisome_plot_data <- function(seurat_obj, display_name, internal_name, type,
+                                        annotation_col, coords_cache = NULL) {
 
   robust_feature_name <- paste0(internal_name, "_robust_score")
   log_scaled_feature_name <- paste0(internal_name, "_log_scaled_score")
@@ -572,113 +827,102 @@ create_matrisome_plots <- function(seurat_obj, display_name, internal_name, type
     return(NULL)
   }
 
-  # --- Data Preparation (with Annotation) ---
-  coords <- GetTissueCoordinates(seurat_obj)
+  # Align coords + FetchData by spot identity before Plotly sees them. D3 does
+  # the same via barcode merge; relying on cbind row position can desync hovers.
+  fetched <- FetchData(seurat_obj, vars = c(robust_feature_name, log_scaled_feature_name, annotation_col))
+  coords  <- align_spatial_coordinates(seurat_obj, coords_cache, cells = rownames(fetched))
+  fetched <- fetched[rownames(coords), , drop = FALSE]
+  df      <- cbind(coords, fetched)
+  df[[annotation_col]] <- as.character(df[[annotation_col]])
 
-  # Fetch scores AND the current annotation column
-  plot_data <- FetchData(seurat_obj, vars = c(robust_feature_name, log_scaled_feature_name, annotation_col))
-  df <- cbind(coords, plot_data)
-
-  # Define the correct Seurat default palette
   seurat_spectral_palette <- rev(RColorBrewer::brewer.pal(11, "Spectral"))
   seurat_color_ramp <- colorRamp(seurat_spectral_palette)
 
-  # --- Create the interactive spatial distribution plot ---
-
-  robust_values <- df[[robust_feature_name]]
-  robust_min <- min(robust_values, na.rm = TRUE)
-  robust_max <- max(robust_values, na.rm = TRUE)
-
-  # Handle the edge case where all values are the same (prevents division by zero)
-  if (robust_max == robust_min) {
-    robust_colors <- rep(rgb(seurat_color_ramp(0), maxColorValue = 255), nrow(df))
-  } else {
-    robust_normalized <- (robust_values - robust_min) / (robust_max - robust_min)
-    robust_colors <- apply(seurat_color_ramp(robust_normalized), 1, function(rgb_vals) {
-      if(any(is.na(rgb_vals))) return("#808080")
-      rgb(rgb_vals[1], rgb_vals[2], rgb_vals[3], maxColorValue = 255)
-    })
+  to_hex <- function(values) {
+    vmin <- suppressWarnings(min(values, na.rm = TRUE))
+    vmax <- suppressWarnings(max(values, na.rm = TRUE))
+    if (!isTRUE(is.finite(vmin)) || !isTRUE(is.finite(vmax)) || vmax == vmin) {
+      base <- seurat_color_ramp(0)
+      return(rep(rgb(base[1, 1], base[1, 2], base[1, 3], maxColorValue = 255),
+                 length(values)))
+    }
+    normalized <- (values - vmin) / (vmax - vmin)
+    rgbm <- seurat_color_ramp(normalized)
+    bad  <- is.na(rgbm[, 1]) | is.na(rgbm[, 2]) | is.na(rgbm[, 3])
+    out  <- rgb(rgbm[, 1], rgbm[, 2], rgbm[, 3], maxColorValue = 255)
+    out[bad] <- "#808080"
+    out
   }
 
-  robust_ticks <- pretty(c(robust_min, robust_max), n = 5)
-  robust_tick_text <- round(robust_ticks, 1)
-
-  interactive_spatial <- plot_ly(df, x = ~imagecol, y = ~imagerow, type = 'scatter', mode = 'markers',
-                                 marker = list(
-                                   color = robust_colors,
-                                   colorbar = list(
-                                     title = "",
-                                     tickvals = robust_ticks,
-                                     ticktext = robust_tick_text,
-                                     len = 0.5,
-                                     thickness = 15
-                                   ),
-                                   cmin = robust_min,
-                                   cmax = robust_max,
-                                   colorscale = seurat_spectral_palette,
-                                   showscale = F,
-                                   size = 5
-                                 ),
-                                 text = as.formula(paste0("~paste('Value:', round(`", robust_feature_name, "`, 3), '<br>Annotation:', `", annotation_col, "`)")),
-                                 hoverinfo = 'text') %>%
-    layout(xaxis = list(title = "", showgrid = FALSE, zeroline = FALSE, showticklabels = FALSE),
-           yaxis = list(title = "", showgrid = FALSE, zeroline = FALSE, showticklabels = FALSE,
-                        scaleanchor = "x", scaleratio = 1, autorange = "reversed"),
-           plot_bgcolor = 'rgba(0,0,0,0)', paper_bgcolor = 'rgba(0,0,0,0)') %>%
-    config(responsive = TRUE)
-
-  # --- Create the interactive hotspot plot ---
-
+  robust_values  <- df[[robust_feature_name]]
   hotspot_values <- df[[log_scaled_feature_name]]
-  hotspot_min <- min(hotspot_values, na.rm = TRUE)
-  hotspot_max <- max(hotspot_values, na.rm = TRUE)
 
-  if (hotspot_max == hotspot_min) {
-    hotspot_colors <- rep(rgb(seurat_color_ramp(0), maxColorValue = 255), nrow(df))
+  list(
+    robust_feature      = robust_feature_name,
+    log_scaled_feature  = log_scaled_feature_name,
+    annotation_col      = annotation_col,
+    df                  = df,
+    robust_colors       = to_hex(robust_values),
+    hotspot_colors      = to_hex(hotspot_values),
+    robust_min          = suppressWarnings(min(robust_values,  na.rm = TRUE)),
+    robust_max          = suppressWarnings(max(robust_values,  na.rm = TRUE)),
+    hotspot_min         = suppressWarnings(min(hotspot_values, na.rm = TRUE)),
+    hotspot_max         = suppressWarnings(max(hotspot_values, na.rm = TRUE)),
+    palette             = seurat_spectral_palette
+  )
+}
+
+#' Build the plotly object for one matrisome category. Called lazily from
+#' renderPlotly() so only the visible category materializes a plotly.
+#' plot_data is an entry from rv$matrisome_results; NULL-safe.
+build_matrisome_plotly <- function(plot_data, kind = c("spatial", "hotspot")) {
+  if (is.null(plot_data)) return(NULL)
+  kind <- match.arg(kind)
+
+  if (kind == "spatial") {
+    colors       <- plot_data$robust_colors
+    vmin         <- plot_data$robust_min
+    vmax         <- plot_data$robust_max
+    feature_name <- plot_data$robust_feature
   } else {
-    hotspot_normalized <- (hotspot_values - hotspot_min) / (hotspot_max - hotspot_min)
-    hotspot_colors <- apply(seurat_color_ramp(hotspot_normalized), 1, function(rgb_vals) {
-      if(any(is.na(rgb_vals))) return("#808080")
-      rgb(rgb_vals[1], rgb_vals[2], rgb_vals[3], maxColorValue = 255)
-    })
+    colors       <- plot_data$hotspot_colors
+    vmin         <- plot_data$hotspot_min
+    vmax         <- plot_data$hotspot_max
+    feature_name <- plot_data$log_scaled_feature
   }
 
-  hotspot_ticks <- pretty(c(hotspot_min, hotspot_max), n = 5)
-  hotspot_tick_text <- round(hotspot_ticks, 1)
+  ticks     <- pretty(c(vmin, vmax), n = 5)
+  tick_text <- round(ticks, 1)
+  df             <- plot_data$df
+  annotation_col <- plot_data$annotation_col
 
-  interactive_hotspot <- plot_ly(df, x = ~imagecol, y = ~imagerow, type = 'scatter', mode = 'markers',
-                                 marker = list(
-                                   color = hotspot_colors,
-                                   colorbar = list(
-                                     title = "",
-                                     tickvals = hotspot_ticks,
-                                     ticktext = hotspot_tick_text,
-                                     len = 0.5,
-                                     thickness = 15
-                                   ),
-                                   cmin = hotspot_min,
-                                   cmax = hotspot_max,
-                                   colorscale = seurat_spectral_palette,
-                                   showscale = F,
-                                   size = 5
-                                 ),
-                                 text = as.formula(paste0("~paste('Value:', round(`", log_scaled_feature_name, "`, 3), '<br>Annotation:', `", annotation_col, "`)")),
-                                 hoverinfo = 'text') %>%
+  plot_ly(df, x = ~imagecol, y = ~imagerow, type = 'scatter', mode = 'markers',
+          marker = list(
+            color = colors,
+            colorbar = list(
+              title = "",
+              tickvals = ticks,
+              ticktext = tick_text,
+              len = 0.5, thickness = 15
+            ),
+            cmin = vmin,
+            cmax = vmax,
+            colorscale = plot_data$palette,
+            showscale = FALSE,
+            size = 5
+          ),
+          text = as.formula(paste0(
+            "~paste('Value:', round(`", feature_name, "`, 3), ",
+            "'<br>Annotation:', `", annotation_col, "`)"
+          )),
+          hoverinfo = 'text') %>%
     layout(xaxis = list(title = "", showgrid = FALSE, zeroline = FALSE, showticklabels = FALSE),
            yaxis = list(title = "", showgrid = FALSE, zeroline = FALSE, showticklabels = FALSE,
                         scaleanchor = "x", scaleratio = 1, autorange = "reversed"),
            plot_bgcolor = 'rgba(0,0,0,0)', paper_bgcolor = 'rgba(0,0,0,0)') %>%
     config(responsive = TRUE)
-
-  # Return the full list of objects.
-  return(list(
-    seurat_object = seurat_obj,
-    interactive_spatial = interactive_spatial,
-    interactive_hotspot = interactive_hotspot,
-    robust_feature = robust_feature_name,
-    log_scaled_feature = log_scaled_feature_name
-  ))
 }
+
 
 #' Calculate spatial statistics for feature correlation.
 calcspatstat <- function(obj,annots,minexp,sels){
@@ -716,6 +960,17 @@ calcspatstat <- function(obj,annots,minexp,sels){
   ))
 
   return(df)
+}
+
+#' Corner colours for the co-expression blend, keyed by palette name.
+coex_blend_colors <- function(palette) {
+  if (palette == "Classic") {
+    list(bottom_left = "#d3d3d3", bottom_right = "#FF0000", top_left = "#00FF00", top_right = "#FFFF00")
+  } else if (palette == "Vibrant") {
+    list(bottom_left = "white", bottom_right = "orange", top_left = "#0000FF", top_right = "#FF0000")
+  } else {
+    list(bottom_left = "#d3d3d3", bottom_right = "#FF00FF", top_left = "#00FF00", top_right = "#FFFFFF")
+  }
 }
 
 #' Create blended spatial plot showing two features.
@@ -1005,17 +1260,60 @@ tryCatch({
 
 #' Run ScType to generate ecm_domain_annotation
 sctype_annotate_ecm <- function(seurat_obj) {
+  if ("ecm_domain_annotation" %in% colnames(seurat_obj@meta.data)) {
+    seurat_obj@meta.data$ecm_domain_annotation <- NULL
+  }
   if (!file.exists(extdata_path("ECM_domains_transformed4ScType.xlsx"))) {
     warning("ECM domain database not found. Skipping annotation.")
     return(seurat_obj)
   }
-  # Prepare gene sets
-  gs_list <- gene_sets_prepare(extdata_path("ECM_domains_transformed4ScType.xlsx"), "ECM")
-  gs_list$gs_positive[["Vascular"]] <- NULL
-  gs_list$gs_negative[["Vascular"]] <- NULL
+  if (!"SCT" %in% SeuratObject::Assays(seurat_obj)) {
+    warning("SCT assay not found. Skipping ECM niche annotation.")
+    return(seurat_obj)
+  }
 
-  # Calculate scores
-  es.max <- sctype_score(scRNAseqData = seurat_obj[["SCT"]]@scale.data, scaled = TRUE,
+  gs_list <- gene_sets_prepare(extdata_path("ECM_domains_transformed4ScType.xlsx"), "ECM")
+  ecm_classes <- c("Interstitial_ECM", "Basement_ECM")
+  if (!all(ecm_classes %in% names(gs_list$gs_positive))) {
+    warning("Required ECM classes were not found in the ScType marker database.")
+    return(seurat_obj)
+  }
+  gs_list$gs_positive <- gs_list$gs_positive[ecm_classes]
+  gs_list$gs_negative <- gs_list$gs_negative[ecm_classes]
+
+  marker_genes <- unique(c(unlist(gs_list$gs_positive), unlist(gs_list$gs_negative)))
+  marker_genes <- marker_genes[!is.na(marker_genes) & nzchar(marker_genes)]
+  scale_genes <- rownames(seurat_obj[["SCT"]]@scale.data)
+  missing_markers <- intersect(setdiff(marker_genes, scale_genes), rownames(seurat_obj[["SCT"]]))
+
+  if (length(missing_markers) > 0 && length(seurat_obj[["SCT"]]@SCTModel.list) > 0) {
+    umi_assay <- tryCatch(Seurat::SCTResults(seurat_obj[["SCT"]], slot = "umi.assay")[[1]],
+                          error = function(e) NULL)
+    if (!is.null(umi_assay) && umi_assay %in% SeuratObject::Assays(seurat_obj)) {
+      seurat_obj <- tryCatch(
+        Seurat::GetResidual(seurat_obj, features = missing_markers, assay = "SCT",
+                            umi.assay = umi_assay, verbose = FALSE),
+        error = function(e) seurat_obj
+      )
+    }
+  }
+
+  scale_data <- seurat_obj[["SCT"]]@scale.data
+  marker_data <- scale_data[intersect(marker_genes, rownames(scale_data)), , drop = FALSE]
+  usable_markers <- character(0)
+  if (nrow(marker_data) > 0) {
+    usable_markers <- rownames(marker_data)[apply(marker_data, 1, function(x) {
+      x <- x[is.finite(x)]
+      length(x) > 1 && max(x) > min(x)
+    })]
+  }
+  if (any(lengths(lapply(gs_list$gs_positive, intersect, y = usable_markers)) == 0)) {
+    warning("ECM niche annotation unavailable: a required class has no usable markers.")
+    return(seurat_obj)
+  }
+  marker_data <- marker_data[usable_markers, , drop = FALSE]
+
+  es.max <- sctype_score(scRNAseqData = marker_data, scaled = TRUE,
                          gs = gs_list$gs_positive, gs2 = gs_list$gs_negative)
 
   # Get top score for each spot
@@ -1026,7 +1324,6 @@ sctype_annotate_ecm <- function(seurat_obj) {
   }))
 
   spot_results$type[as.numeric(as.character(spot_results$scores)) <= 0] <- "not.assigned"
-  spot_results$type[grepl("Vascular", spot_results$type, ignore.case = TRUE)] <- "not.assigned"
 
   # Add to metadata, ensuring correct order
   seurat_obj$ecm_domain_annotation <- spot_results$type[match(rownames(seurat_obj@meta.data), spot_results$spot)]
@@ -1041,9 +1338,7 @@ translate_gene_signatures <- function(seurat_obj, signature_list) {
 
   for (sig_name in names(signature_list)) {
     original_genes <- signature_list[[sig_name]]
-    result <- suppressMessages(suppressWarnings(
-      scCustomize::Updated_HGNC_Symbols(original_genes, verbose = FALSE, case_check_as_warn = TRUE)
-    ))
+    result <- update_hgnc_symbols(original_genes, hgnc_long_data)
     corrected_genes <- result$Output_Features
     valid_genes <- unique(corrected_genes[corrected_genes %in% seurat_genes])
     if (length(valid_genes) > 0) {
@@ -1126,12 +1421,12 @@ prepare_uploaded_object <- function(seurat_obj, mat_feat_sigs, ecm_ucell_sigs) {
     }
   }
 
-  # SCTransform (only if needed for ScType and no existing SCT data)
-  needs_sctype <- !"ecm_domain_annotation" %in% colnames(seurat_obj@meta.data)
+  # SCTransform if ScType has neither residuals nor a fitted SCT model
   has_sct <- "SCT" %in% SeuratObject::Assays(seurat_obj)
   has_scale_data <- has_sct && nrow(seurat_obj[["SCT"]]@scale.data) > 0
+  has_sct_model <- has_sct && length(seurat_obj[["SCT"]]@SCTModel.list) > 0
 
-  if (needs_sctype && !has_scale_data) {
+  if (!has_scale_data && !has_sct_model) {
     showNotification("SCT data not found. Running SCTransform...", type = "message", duration = 8)
     # Use default assay dynamically (handles both native Seurat "Spatial" and converted SPE "originalexp"/"RNA")
     seurat_obj <- SCTransform(seurat_obj, assay = DefaultAssay(seurat_obj), verbose = FALSE)
@@ -1146,10 +1441,13 @@ prepare_uploaded_object <- function(seurat_obj, mat_feat_sigs, ecm_ucell_sigs) {
     seurat_obj <- add_matrisome_feature_scores(seurat_obj, mat_feat_sigs)
   }
 
-  # --- Step 3: Check & Add ECM Domain Annotation ---
+  # --- Step 3: Add ECM Domain Annotation ---
+  seurat_obj <- sctype_annotate_ecm(seurat_obj)
   if (!"ecm_domain_annotation" %in% colnames(seurat_obj@meta.data)) {
-    showNotification("ECM domain annotation not found. Running ScType...", type = "message", duration = 8)
-    seurat_obj <- sctype_annotate_ecm(seurat_obj)
+    showNotification(
+      "ECM niche annotations are unavailable because this dataset does not contain the required marker genes.",
+      type = "warning", duration = 10
+    )
   }
 
   # --- Step 4: Check & Add ECM Niche Signatures ---
@@ -1168,6 +1466,47 @@ prepare_uploaded_object <- function(seurat_obj, mat_feat_sigs, ecm_ucell_sigs) {
 # --------------------------------------------------------------------------- #
 # Spatial Statistics & Visualization Helpers
 # --------------------------------------------------------------------------- #
+
+#' Permutation test for spatial cross-correlation (bivariate Moran's I).
+#'
+#' Sparse, allocation-free reformulation of MERINGUE::spatialCrossCor
+#' (cv = dx'Wdy + dy'Wdx) so the label-permutation null is cheap to build
+#' and avoids the dense N x N outer products of the original implementation.
+#'
+#' @param x,y Named feature vectors aligned to the spatial weight matrix.
+#' @param weight Spatial neighbour weight matrix (from getSpatialNeighbors).
+#' @param n Number of label permutations for the null distribution.
+#' @param seed Seed for reproducible permutation p-values.
+#' @return list(cor = observed statistic, pval = two-sided permutation p-value).
+spatial_cross_cor_test <- function(x, y, weight, n = 999, seed = 1) {
+  common <- intersect(names(x), rownames(weight))
+  if (length(common) < 3) return(list(cor = NA_real_, pval = NA_real_))
+
+  W <- methods::as(weight[common, common], "CsparseMatrix")
+  x <- x[common]; y <- y[common]
+  rs <- Matrix::rowSums(W); rs[rs == 0] <- 1
+  W <- Matrix::Diagonal(x = 1 / rs) %*% W
+
+  N <- length(x); Wsum <- sum(W)
+  dy <- y - mean(y); v_y <- sum(dy^2); Wdy <- as.numeric(W %*% dy)
+
+  scc <- function(dx) {
+    v <- sqrt(sum(dx^2) * v_y)
+    if (v == 0) return(0)
+    cv <- sum(dx * Wdy) + sum(dy * as.numeric(W %*% dx))
+    (N / Wsum) * (cv / v) / 2
+  }
+
+  observed <- scc(x - mean(x))
+
+  set.seed(seed)
+  perm <- vapply(seq_len(n), function(i) {
+    xp <- x[sample.int(N)]
+    scc(xp - mean(xp))
+  }, numeric(1))
+
+  list(cor = observed, pval = sum(abs(c(perm, observed)) >= abs(observed)) / (n + 1))
+}
 
 #' Calculate Spatial Autocorrelation (Moran's I) for Matrisome Scores
 #'
@@ -1223,7 +1562,8 @@ calculate_autocorrelation <- function(seurat_obj) {
 #' @param feature_name The display name for the feature (for tooltips).
 #' @param annotation_vector A vector of annotations for hover text.
 #' @return A plotly object.
-create_feature_plot <- function(data, feature_col, feature_name, annotation_vector) {
+create_feature_plot <- function(data, feature_col, feature_name, annotation_vector,
+                                colour_values = NULL, relative_contrast = FALSE) {
   if (is.null(data) || !feature_col %in% colnames(data)) {
     return(plot_ly(type = 'scatter', mode = 'markers') %>%
              add_annotations(
@@ -1233,9 +1573,46 @@ create_feature_plot <- function(data, feature_col, feature_name, annotation_vect
              ))
   }
 
+  data <- as.data.frame(data)
+  if (!is.null(names(annotation_vector)) && all(rownames(data) %in% names(annotation_vector))) {
+    annotation_vector <- annotation_vector[rownames(data)]
+  }
+  if (length(annotation_vector) == nrow(data)) {
+    data$Annotation <- as.character(annotation_vector)
+  } else if ("Annotation" %in% colnames(data)) {
+    data$Annotation <- as.character(data$Annotation)
+  } else {
+    data$Annotation <- NA_character_
+  }
+  if (!is.null(colour_values) && !is.null(names(colour_values)) &&
+      all(rownames(data) %in% names(colour_values))) {
+    colour_values <- colour_values[rownames(data)]
+  }
+  if (is.null(colour_values) || length(colour_values) != nrow(data)) {
+    colour_values <- data[[feature_col]]
+    relative_contrast <- FALSE
+  }
+
+  data$.hover_text <- paste(
+    feature_name, ":", round(data[[feature_col]], 3),
+    "<br>Annotation:", data$Annotation
+  )
+  if (relative_contrast) {
+    data$.hover_text <- paste0(
+      data$.hover_text,
+      "<br>Relative percentile: ", round(100 * colour_values, 1), "%"
+    )
+  }
+
   colors <- rev(RColorBrewer::brewer.pal(11, "RdYlBu"))
-  max_val <- max(data[[feature_col]], na.rm = TRUE)
-  data$Annotation <- annotation_vector
+  max_val <- if (relative_contrast) 1 else max(colour_values, na.rm = TRUE)
+  colorbar_title <- if (relative_contrast) {
+    "UCell relative<br>contrast"
+  } else if (identical(feature_name, "Custom matrisome list")) {
+    "Custom matrisome<br>list"
+  } else {
+    feature_name
+  }
 
   plot_ly(data,
           x = ~imagecol,
@@ -1244,7 +1621,7 @@ create_feature_plot <- function(data, feature_col, feature_name, annotation_vect
           mode = 'markers',
           marker = list(
             size = 5,
-            color = data[[feature_col]],
+            color = colour_values,
             colorscale = list(
               list(0, colors[1]),
               list(0.5, colors[6]),
@@ -1254,19 +1631,25 @@ create_feature_plot <- function(data, feature_col, feature_name, annotation_vect
             cmin = 0,
             cmax = max_val,
             colorbar = list(
-              title = list(text = feature_name, font = list(size = 14)),
-              thickness = 15, len = 0.5, y = 0.5
+              title = list(text = ""),
+              thickness = 15, len = 0.5, x = 0.86, xanchor = "left", y = 0.5
             )
           ),
-          text = ~paste(
-            feature_name, ":", round(.data[[feature_col]], 3),
-            "<br>Annotation:", .data$Annotation
-          ),
+          text = ~.hover_text,
           hoverinfo = 'text') %>%
     layout(
-      xaxis = list(title = "", showgrid = FALSE, showticklabels = FALSE, zeroline = FALSE),
+      xaxis = list(title = "", domain = c(0, 0.78), constrain = "domain",
+                   showgrid = FALSE, showticklabels = FALSE, zeroline = FALSE),
       yaxis = list(title = "", showgrid = FALSE, showticklabels = FALSE, zeroline = FALSE,
-                   scaleanchor = "x", scaleratio = 1, autorange = "reversed"),
+                   scaleanchor = "x", scaleratio = 1, constrain = "domain",
+                   autorange = "reversed"),
+      annotations = list(list(
+        x = 0.89, y = 0.745, xref = "paper", yref = "paper",
+        text = colorbar_title, showarrow = FALSE,
+        xanchor = "center", yanchor = "bottom", align = "left",
+        font = list(size = 14)
+      )),
+      margin = list(l = 20, r = 20, t = 20, b = 20),
       plot_bgcolor = 'rgba(0,0,0,0)', paper_bgcolor = 'rgba(0,0,0,0)'
     )
 }
@@ -1316,8 +1699,8 @@ p3a <- function(data_df, feature_name, stable_color_map, selected_types, cleaned
   ) %>% config(displayModeBar = FALSE)
 
   if (!independent_y) {
-    y_range <- range(data_df$feature1, na.rm = TRUE)
-    p <- p %>% layout(yaxis = list(title = 'Expression', range = y_range))
+    shared_range <- c(0, max(c(data_df$feature1, data_df$feature2), na.rm = TRUE))
+    p <- p %>% layout(yaxis = list(title = 'Expression', range = shared_range))
   }
   return(p)
 }
@@ -1331,9 +1714,6 @@ p3b <- function(data_df, feature_name, stable_color_map, selected_types, cleaned
     return(plot_ly(type = 'scatter', mode = 'markers') %>%
              layout(title = paste("No data available for", feature_name)))
   }
-
-  rng <- c(data_df$feature1, data_df$feature2)
-  rng <- c(0, max(rng, na.rm = TRUE))
 
   kz <- data.frame(clust = cleaned_annot_vector, value = data_df$feature2)
   kz <- kz[kz$clust %in% selected_types, ]
@@ -1363,7 +1743,8 @@ p3b <- function(data_df, feature_name, stable_color_map, selected_types, cleaned
   ) %>% config(displayModeBar = FALSE)
 
   if (!independent_y) {
-    p <- p %>% layout(yaxis = list(title = 'Expression', range = rng))
+    shared_range <- c(0, max(c(data_df$feature1, data_df$feature2), na.rm = TRUE))
+    p <- p %>% layout(yaxis = list(title = 'Expression', range = shared_range))
   }
   return(p)
 }
@@ -2048,4 +2429,331 @@ spe_to_seurat <- function(
 
   if (verbose) message("Done!")
   return(seur)
+}
+
+#' k-nearest-neighbour search over spot coordinates.
+#'
+#' Uses RANN::nn2 (a Seurat dependency, so it should be present in every deployment unless they screw up badly). Falls
+#' back to an exact chunked search for small objects if RANN is unavailable,
+#' and refuses the O(n^2) fallback on large ones rather than stalling a worker forever.
+#'
+#' @param coords Numeric matrix, n x 2.
+#' @param k Number of neighbours to return (including self).
+#' @return list(idx, dist), each n x k.
+.matrispace_knn <- function(coords, k) {
+  n <- nrow(coords)
+  k <- as.integer(min(k, n))
+
+  if (requireNamespace("RANN", quietly = TRUE)) {
+    nn <- RANN::nn2(data = coords, query = coords, k = k)
+    return(list(idx = nn$nn.idx, dist = nn$nn.dists))
+  }
+
+  if (n > 20000L) {
+    stop("Leakage correction needs the RANN package for objects with more than ",
+         "20,000 spots. Install RANN (it ships with Seurat) and reload.")
+  }
+
+  idx  <- matrix(0L,  n, k)
+  dst  <- matrix(Inf, n, k)
+  block <- max(1L, floor(2e7 / n))
+  for (start in seq(1L, n, by = block)) {
+    rows <- start:min(n, start + block - 1L)
+    d2 <- outer(coords[rows, 1L], coords[, 1L], "-")^2 +
+          outer(coords[rows, 2L], coords[, 2L], "-")^2
+    for (ii in seq_along(rows)) {
+      o <- order(d2[ii, ])[seq_len(k)]
+      idx[rows[ii], ] <- o
+      dst[rows[ii], ] <- sqrt(d2[ii, o])
+    }
+  }
+  list(idx = idx, dist = dst)
+}
+
+#' Build a row-stochastic neighbour-weight matrix over spots.
+#'
+#' Row i holds 1/deg(i) at the columns of i's retained neighbours and zero on
+#' the diagonal, so W %*% x is the local neighbour mean of x. Spots with no
+#' retained neighbour get an all-zero row and are therefore left uncorrected.
+#'
+#' @param coords Data frame or matrix of spot coordinates; the first two
+#'   columns are used.
+#' @param k Neighbours per spot (6 matches the Visium hexagonal ring).
+#' @param dist_factor Multiple of the median nearest-neighbour distance beyond
+#'   which a neighbour is discarded. Inf disables the cap.
+#' @return A sparse n x n dgCMatrix, or NULL if a weight matrix cannot be built.
+matrispace_leakage_weights <- function(coords, k = 6L, dist_factor = 1.6) {
+  coords <- as.matrix(coords[, 1:2, drop = FALSE])
+  storage.mode(coords) <- "double"
+  if (anyNA(coords)) return(NULL)
+
+  n <- nrow(coords)
+  if (n < 8L) return(NULL)
+  k <- as.integer(min(k, n - 1L))
+  if (k < 1L) return(NULL)
+
+  nn   <- .matrispace_knn(coords, k = k + 1L)
+  idx  <- nn$idx[,  -1L, drop = FALSE]   # column 1 is the spot itself
+  dst  <- nn$dist[, -1L, drop = FALSE]
+
+  d1 <- dst[, 1L]
+  d1 <- d1[is.finite(d1) & d1 > 0]
+  cutoff <- if (length(d1) > 0L && is.finite(dist_factor)) {
+    stats::median(d1) * dist_factor
+  } else Inf
+
+  keep <- is.finite(dst) & dst <= cutoff & idx >= 1L & idx <= n
+  if (!any(keep)) return(NULL)
+
+  i <- row(idx)[keep]
+  j <- as.integer(idx[keep])
+  deg <- tabulate(i, nbins = n)
+  deg[deg == 0L] <- 1L
+
+  Matrix::sparseMatrix(i = i, j = j, x = 1 / deg[i], dims = c(n, n))
+}
+
+#' Apply the first-order leakage correction to one sparse expression matrix.
+#'
+#' @param mat Sparse genes x spots matrix.
+#' @param Wt Transposed spot weight matrix from matrispace_leakage_weights().
+#' @param alpha Leakage coefficient; 0 disables the correction.
+#' @param log_scale TRUE for a log1p-scaled layer ("data"), FALSE for counts.
+#' @param max_block_nnz Approximate ceiling on the non-zeros held in one block.
+#' @return Corrected sparse matrix with the original dimnames.
+matrispace_correct_matrix <- function(mat, Wt, alpha,
+                                      log_scale = FALSE,
+                                      max_block_nnz = 3e7) {
+  if (is.null(mat) || !is.finite(alpha) || alpha <= 0) return(mat)
+  if (!inherits(mat, "sparseMatrix")) return(mat)
+
+  mat <- methods::as(mat, "CsparseMatrix")
+  ng  <- nrow(mat)
+  nnz <- length(mat@x)
+  if (ng == 0L || nnz == 0L) return(mat)
+
+  rows_per_block <- max(1L, min(ng, as.integer(floor(ng * max_block_nnz /
+                                                     max(nnz * 7, 1)))))
+  starts <- seq(1L, ng, by = rows_per_block)
+  out <- vector("list", length(starts))
+
+  for (b in seq_along(starts)) {
+    rows <- starts[b]:min(ng, starts[b] + rows_per_block - 1L)
+    sub  <- methods::as(mat[rows, , drop = FALSE], "CsparseMatrix")
+    if (log_scale) sub@x <- expm1(sub@x)
+
+    res <- methods::as(sub - alpha * (sub %*% Wt), "CsparseMatrix")
+    res@x[res@x < 0] <- 0
+    res <- Matrix::drop0(res)
+    if (log_scale) res@x <- log1p(res@x)
+
+    out[[b]] <- res
+  }
+
+  res <- if (length(out) == 1L) out[[1L]] else do.call(rbind, out)
+  dimnames(res) <- dimnames(mat)
+  res
+}
+
+#' Splice corrected rows back into a sparse matrix without changing its pattern.
+#'
+#' Rewriting the @x slot in place is exact and costs one vectorised pass, instead of the sparse re-assembly that `mat[rows, ] <- ...` would trigger.
+#'
+#' @param mat Original sparse genes x spots matrix (dgCMatrix).
+#' @param ridx Integer row indices of `mat` that were corrected.
+#' @param csub Corrected submatrix, length(ridx) x ncol(mat), rows in the order
+#'   of `ridx`.
+#' @param max_dense_cells Ceiling on the block held at once.
+#' @return A new dgCMatrix; `mat` is left untouched.
+.matrispace_splice_rows <- function(mat, ridx, csub, max_dense_cells = 2e7) {
+  if (!inherits(mat, "dgCMatrix")) {
+    mat[ridx, ] <- csub
+    return(mat)
+  }
+  nnz <- length(mat@x)
+  if (nnz == 0L || length(ridx) == 0L) return(mat)
+
+  pos <- integer(nrow(mat))
+  pos[ridx] <- seq_along(ridx)
+
+  ent_row <- pos[mat@i + 1L]
+  ent <- which(ent_row > 0L)
+  if (length(ent) == 0L) return(mat)
+
+  ent_row <- ent_row[ent]
+  ent_col <- rep.int(seq_len(ncol(mat)), diff(mat@p))[ent]
+
+  newx <- mat@x
+  ncell <- as.numeric(length(ridx)) * ncol(mat)
+  if (ncell <= max_dense_cells) {
+    cd <- as.matrix(csub)
+    newx[ent] <- cd[cbind(ent_row, ent_col)]
+  } else {
+    block <- max(1L, as.integer(floor(max_dense_cells / max(length(ridx), 1L))))
+    for (start in seq(1L, ncol(mat), by = block)) {
+      stop_c <- min(ncol(mat), start + block - 1L)
+      sel <- ent_col >= start & ent_col <= stop_c
+      if (!any(sel)) next
+      cd <- as.matrix(csub[, start:stop_c, drop = FALSE])
+      newx[ent[sel]] <- cd[cbind(ent_row[sel], ent_col[sel] - start + 1L)]
+    }
+  }
+
+  result <- methods::new("dgCMatrix", i = mat@i, p = mat@p, x = newx,
+                         Dim = mat@Dim, Dimnames = mat@Dimnames)
+  Matrix::drop0(result)
+}
+
+#' SpotClean-style leakage correction of a spatial Seurat object.
+#'
+#' Pass `genes = NULL` to correct every row (much slower, not endorsed).
+#'
+#' Metadata columns (pre-computed UCell signature scores, ScType ECM domain
+#' annotation) are never recomputed here, but they carry over leakage across which is supposed to be stochastic
+#' and should therefore cancel out in normalization vs housekeeping genes.
+#'
+#' @param obj Seurat object with spatial coordinates.
+#' @param genes Character vector of features to correct, or NULL for all.
+#' @param alpha Leakage coefficient. 0 returns the object untouched.
+#' @param k Neighbors per spot.
+#' @param dist_factor Distance cap, as a multiple of the median NN distance.
+#' @param assays Assays to correct; NULL means every assay in the object.
+#' @param verbose progress messages.
+#' @return list(object, applied, n_spots, n_corrected, n_genes, layers, message)
+matrispace_spotclean <- function(obj, genes = NULL, alpha = 0.10, k = 6L,
+                                 dist_factor = 1.6, assays = NULL,
+                                 verbose = FALSE) {
+  fail <- function(msg) list(object = obj, applied = FALSE, n_spots = NA_integer_,
+                             n_corrected = 0L, n_genes = 0L,
+                             layers = character(0), message = msg)
+
+  if (!inherits(obj, "Seurat")) return(fail("Not a Seurat object."))
+  if (length(alpha) != 1L || !is.finite(alpha) || alpha <= 0 || alpha > 1) {
+    return(fail("Leakage coefficient must be greater than zero and at most one."))
+  }
+  if (length(k) != 1L || !is.finite(k) || k < 1) {
+    return(fail("Neighbour count must be a positive integer."))
+  }
+  k <- as.integer(k)
+  if (length(dist_factor) != 1L || is.na(dist_factor) || dist_factor <= 0) {
+    return(fail("Distance factor must be positive."))
+  }
+
+  scoped <- !is.null(genes)
+  if (scoped) {
+    genes <- unique(as.character(genes))
+    genes <- genes[!is.na(genes) & nzchar(genes)]
+    if (length(genes) == 0L) return(fail("No features selected for correction."))
+  }
+
+  cells <- colnames(obj)
+  n <- length(cells)
+
+  coords <- tryCatch(align_spatial_coordinates(obj, cells = cells),
+                     error = function(e) NULL)
+  if (is.null(coords) || nrow(coords) < 8L) {
+    return(fail("Spatial coordinates unavailable; leakage correction skipped."))
+  }
+  coords <- as.data.frame(coords)
+
+  xy <- if (all(c("imagecol", "imagerow") %in% colnames(coords))) {
+    coords[, c("imagecol", "imagerow"), drop = FALSE]
+  } else if (all(c("x", "y") %in% colnames(coords))) {
+    coords[, c("x", "y"), drop = FALSE]
+  } else if (all(c("col", "row") %in% colnames(coords))) {
+    coords[, c("col", "row"), drop = FALSE]
+  } else NULL
+  if (is.null(xy)) return(fail("No usable coordinate columns; correction skipped."))
+
+  xy <- data.frame(x = suppressWarnings(as.numeric(xy[[1L]])),
+                   y = suppressWarnings(as.numeric(xy[[2L]])))
+  ok <- is.finite(xy$x) & is.finite(xy$y)
+  common <- intersect(cells, rownames(coords)[ok])
+  if (length(common) < 8L) return(fail("Too few spots with valid coordinates."))
+
+  W_sub <- matrispace_leakage_weights(xy[match(common, rownames(coords)), , drop = FALSE],
+                                      k = k, dist_factor = dist_factor)
+  if (is.null(W_sub)) return(fail("Could not build a spot neighbourhood graph."))
+
+  pos <- match(common, cells)
+  Ws  <- methods::as(W_sub, "TsparseMatrix")
+  W   <- Matrix::sparseMatrix(i = pos[Ws@i + 1L], j = pos[Ws@j + 1L], x = Ws@x,
+                              dims = c(n, n))
+  Wt  <- Matrix::t(W)
+  rm(W_sub, Ws, W)
+
+  target <- if (is.null(assays)) SeuratObject::Assays(obj) else
+    intersect(assays, SeuratObject::Assays(obj))
+  touched <- character(0)
+  hit_genes <- character(0)
+
+  for (a in target) {
+    for (lyr in c("counts", "data")) {
+      m <- tryCatch(SeuratObject::LayerData(obj, assay = a, layer = lyr),
+                    error = function(e) NULL)
+      if (is.null(m) || length(dim(m)) != 2L) next
+      if (nrow(m) == 0L || ncol(m) != n) next
+      if (!inherits(m, "sparseMatrix")) next
+
+      # The spatial weights are ordered against colnames(obj). Never apply
+      # them positionally to a layer whose spots cannot be aligned exactly.
+      layer_cells <- colnames(m)
+      if (is.null(layer_cells) || !setequal(layer_cells, cells)) next
+      if (!identical(layer_cells, cells)) {
+        m <- m[, cells, drop = FALSE]
+      }
+
+      log_scale <- identical(lyr, "data")
+
+      ridx <- if (scoped) {
+        r <- match(genes, rownames(m))
+        r[!is.na(r)]
+      } else integer(0)
+      if (scoped && length(ridx) == 0L) next
+      if (scoped) hit_genes <- union(hit_genes, rownames(m)[ridx])
+
+      corrected <- tryCatch({
+        if (!scoped) {
+          matrispace_correct_matrix(m, Wt, alpha, log_scale = log_scale)
+        } else {
+          csub <- matrispace_correct_matrix(m[ridx, , drop = FALSE], Wt, alpha,
+                                            log_scale = log_scale)
+          .matrispace_splice_rows(m, ridx, csub)
+        }
+      }, error = function(e) { warning(sprintf(
+        "Leakage correction failed on %s/%s (%s); layer left unchanged.",
+        a, lyr, conditionMessage(e))); NULL })
+      if (is.null(corrected)) next
+
+      ok_set <- tryCatch({
+        SeuratObject::LayerData(obj, assay = a, layer = lyr) <- corrected
+        TRUE
+      }, error = function(e) { warning(sprintf(
+        "Could not write corrected %s/%s (%s); layer left unchanged.",
+        a, lyr, conditionMessage(e))); FALSE })
+
+      if (isTRUE(ok_set)) {
+        touched <- c(touched, paste(a, lyr, sep = "/"))
+        if (verbose) message(sprintf("Leakage correction applied to %s/%s.", a, lyr))
+      }
+      rm(m, corrected)
+    }
+  }
+
+  if (length(touched) == 0L) {
+    return(fail(if (scoped)
+      "None of the selected features were found in a correctable layer."
+    else "No sparse counts/data layer could be corrected."))
+  }
+
+  list(object      = obj,
+       applied     = TRUE,
+       n_spots     = n,
+       n_corrected = length(common),
+       n_genes     = if (scoped) length(hit_genes) else nrow(obj),
+       layers      = touched,
+       message     = sprintf("%s feature%s, \u03b1 = %.2f, k = %d, %d/%d spots in-graph",
+                             if (scoped) format(length(hit_genes), big.mark = ",") else "all",
+                             if (!scoped || length(hit_genes) != 1L) "s" else "",
+                             alpha, k, length(common), n))
 }

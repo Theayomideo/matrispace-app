@@ -16,37 +16,30 @@ initialize_reference_data <- function() {
   # Load LR database for spatial co-expression analysis
   lr_db <- readRDS(extdata_path("ultimate_ecm_interactions_DEDUPLICATED.rds"))
 
+  # MatriComDB contains both directional ligand-receptor relationships and
+  # undirected physical interactions. Represent every interaction once as an
+  # alphabetically ordered protein-pair axis and remove self-interactions.
+  lr_db <- lr_db %>%
+    filter(Ligand != Receptor) %>%
+    mutate(
+      .axis_gene_1 = pmin(Ligand, Receptor),
+      .axis_gene_2 = pmax(Ligand, Receptor)
+    ) %>%
+    group_by(.axis_gene_1, .axis_gene_2) %>%
+    summarise(
+      Ligand = dplyr::first(.axis_gene_1),
+      Receptor = dplyr::first(.axis_gene_2),
+      Interaction_Type = paste(sort(unique(Interaction_Type)), collapse = "; "),
+      Source = paste(sort(unique(Source)), collapse = "; "),
+      Database_Score = max(Database_Score),
+      .groups = "drop"
+    ) %>%
+    select(Ligand, Receptor, Interaction_Type, Source, Database_Score)
+
   # Matrisome reference (single source of truth for all matrisome data)
   matrisome <- readRDS(extdata_path("matrisome_v2.rds"))
   recs <- unique(readRDS(extdata_path("receptors.RDS"))$to)
-
-  # Standardize gene symbols in reference data to current HGNC nomenclature
-  # Helper: standardize a vector that may contain duplicates
-  .standardize_genes <- function(genes) {
-    uniq <- unique(genes)
-    result <- scCustomize::Updated_HGNC_Symbols(uniq, verbose = FALSE, case_check_as_warn = TRUE)
-    mapping <- setNames(result$Output_Features, result$input_features)
-    unname(mapping[genes])
-  }
-
-  suppressMessages(suppressWarnings({
-    # Standardize matrisome gene symbols
-    matrisome$gene <- .standardize_genes(matrisome$gene)
-
-    # Derive mobj from matrisome (single source of truth)
-    mobj <- unique(matrisome$gene)
-
-    # Standardize other reference data
-    recs <- unique(.standardize_genes(recs))
-
-    # LR database columns - then drop duplicate interaction pairs
-    lr_db$Ligand <- .standardize_genes(lr_db$Ligand)
-    lr_db$Receptor <- .standardize_genes(lr_db$Receptor)
-    lr_db <- lr_db[!duplicated(lr_db[, c("Ligand", "Receptor")]), ]
-
-    # ECM niche signatures - unique within each signature
-    ecm_ucell_signatures <- lapply(ecm_ucell_signatures, function(g) unique(.standardize_genes(g)))
-  }))
+  mobj <- unique(matrisome$gene)
 
   # Build matrisome_feature_signatures from matrisome data frame
   # Main categories: filter by notes column

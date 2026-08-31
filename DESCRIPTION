@@ -53,6 +53,7 @@ Imports:
     bsicons,
     scCustomize,
     MERINGUE,
+    RANN,
     readxl,
     HGNChelper,
     UCell,
