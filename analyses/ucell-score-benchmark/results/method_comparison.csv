@@ -1,0 +1,3 @@
+"signature","spots","spearman_ucell_vs_normalized_sum","spearman_ucell_vs_raw_sum","top10_jaccard_ucell_vs_normalized_sum","top10_jaccard_ucell_vs_raw_sum"
+"Basement",4992,0.917175481707096,0.0507201389067434,0.54320987654321,0.179245283018868
+"Interstitial",4992,0.947038696869602,0.333803463240656,0.477104874446086,0.219512195121951

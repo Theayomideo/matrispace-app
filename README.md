@@ -14,12 +14,14 @@
 * MatriSpace features an intuitive graphical user interface implemented in R Shiny.
 * The online version of MatriSpace, supporting both user uploads and a collection of 240 pre-processed datasets, is available and **ready-to-use** at https://izzilab-matrispace.share.connect.posit.cloud/
 * This repository contains the **offline version** of MatriSpace for local use with user-uploaded data (no dataset size restrictions). See [Installation](#installation) instructions below.
-* The [`analyses/breast-case-study/`](analyses/breast-case-study/) folder contains the worked example of downstream analysis on MatriSpace output, as used in the manuscript's case study.
+* The [`analyses/`](analyses/) folder contains the manuscript case studies, UCell score benchmark, and SHG–CosMx collagen validation.
+* Large inputs for the UCell and SHG–CosMx analyses are available from [Zenodo (doi:10.5281/zenodo.22231956)](https://doi.org/10.5281/zenodo.22231956).
 * If you use MatriSpace in your publications, please cite our preprint: **doi** [10.64898/2026.04.26.720198](https://doi.org/10.64898/2026.04.26.720198)
 
 [![Badge](https://img.shields.io/badge/MatriSpace-Online-blue)](https://izzilab-matrispace.share.connect.posit.cloud/)
 [![Badge](https://img.shields.io/badge/Installation-info-green)](#installation)
 [![Badge](https://img.shields.io/badge/Case_study-script-orange)](analyses/breast-case-study/)
+[![Badge](https://img.shields.io/badge/Reproducibility_data-Zenodo-blue)](https://doi.org/10.5281/zenodo.22231956)
 [![Badge](https://img.shields.io/badge/Manuscript-bioRxiv-red)](https://doi.org/10.64898/2026.04.26.720198)
 [![Badge](https://img.shields.io/badge/Release-v1.0-green)](https://github.com/Theayomideo/matrispace-app/releases/tag/v1.0)
 

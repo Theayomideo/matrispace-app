@@ -1,0 +1,2 @@
+"spatial_unit","hex_area_um2","minimum_cells","retained_hexagons","spearman","confidence_interval_low","confidence_interval_high","circular_shift_p","adjusted_spearman"
+"area-matched regular hexagon",10121.553294778,10,1545,0.489245026163935,0.408182471454157,0.558975813830737,0.001,0.478715022479151

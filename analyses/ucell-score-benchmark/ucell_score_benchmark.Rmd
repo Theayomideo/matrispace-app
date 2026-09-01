@@ -1,0 +1,328 @@
+---
+title: "UCell score benchmark"
+output: github_document
+params:
+  data_file: "data/Breast_cancer_Ductal_Carcinoma_In_Situ_Invasive.RDS"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  fig.path = "figures/",
+  dpi = 300
+)
+
+if (!exists("params")) {
+  params <- list(
+    data_file = "data/Breast_cancer_Ductal_Carcinoma_In_Situ_Invasive.RDS"
+  )
+}
+
+library(ggplot2)
+library(matrispace)
+library(Matrix)
+library(Seurat)
+library(SeuratObject)
+
+dir.create("figures", showWarnings = FALSE)
+dir.create("results", showWarnings = FALSE)
+set.seed(264998)
+```
+
+## Scores
+
+```{r score-signatures}
+seu <- readRDS(params$data_file)
+niche_keys <- c("basement", "interstitial")
+signature_labels <- c(basement = "Basement", interstitial = "Interstitial")
+requested_signatures <- ecm_signatures[niche_keys]
+signatures <- setNames(
+  lapply(requested_signatures, intersect, y = rownames(seu)),
+  unname(signature_labels[niche_keys])
+)
+
+signature_coverage <- do.call(rbind, lapply(niche_keys, function(niche_key) {
+  signature <- unname(signature_labels[niche_key])
+  data.frame(
+    signature = signature,
+    requested_genes = length(unique(requested_signatures[[niche_key]])),
+    measured_genes = length(signatures[[signature]])
+  )
+}))
+signature_coverage$coverage_fraction <-
+  signature_coverage$measured_genes / signature_coverage$requested_genes
+
+score_assay <- if ("SCT" %in% Assays(seu)) "SCT" else DefaultAssay(seu)
+score_expression <- LayerData(seu, assay = score_assay, layer = "data")
+raw_assay <- if ("Spatial" %in% Assays(seu)) "Spatial" else score_assay
+raw_counts <- LayerData(seu, assay = raw_assay, layer = "counts")
+
+seu <- score_ecm_niche_signatures(
+  seu,
+  niches = niche_keys,
+  assay = score_assay,
+  layer = "data",
+  min_genes = 1,
+  maxRank = 1500,
+  overwrite = TRUE
+)
+niche_scores <- get_ecm_niche_signature_scores(seu, niches = niche_keys)
+ucell <- as.data.frame(t(niche_scores[, colnames(seu), drop = FALSE]))
+names(ucell) <- paste0(unname(signature_labels[rownames(niche_scores)]), "_UCell")
+
+top_spots <- function(x, fraction = 0.10) {
+  order(x, decreasing = TRUE)[seq_len(ceiling(length(x) * fraction))]
+}
+
+jaccard <- function(x, y) {
+  length(intersect(x, y)) / length(union(x, y))
+}
+
+percentile <- function(x) {
+  100 * (rank(x, ties.method = "average") - 1) / (length(x) - 1)
+}
+
+spot_scores <- do.call(rbind, lapply(names(signatures), function(signature) {
+  genes <- signatures[[signature]]
+  raw_genes <- intersect(genes, rownames(raw_counts))
+  data.frame(
+    spot_id = colnames(seu),
+    signature = signature,
+    ucell = ucell[[paste0(signature, "_UCell")]],
+    normalized_sum = Matrix::colSums(score_expression[genes, , drop = FALSE]),
+    raw_sum = Matrix::colSums(raw_counts[raw_genes, , drop = FALSE])
+  )
+}))
+
+method_comparison <- do.call(rbind, lapply(split(spot_scores, spot_scores$signature), function(d) {
+  data.frame(
+    signature = d$signature[1],
+    spots = nrow(d),
+    spearman_ucell_vs_normalized_sum = cor(d$ucell, d$normalized_sum, method = "spearman"),
+    spearman_ucell_vs_raw_sum = cor(d$ucell, d$raw_sum, method = "spearman"),
+    top10_jaccard_ucell_vs_normalized_sum = jaccard(top_spots(d$ucell), top_spots(d$normalized_sum)),
+    top10_jaccard_ucell_vs_raw_sum = jaccard(top_spots(d$ucell), top_spots(d$raw_sum))
+  )
+}))
+
+write.csv(method_comparison, "results/method_comparison.csv", row.names = FALSE)
+write.csv(signature_coverage, "results/signature_coverage.csv", row.names = FALSE)
+spot_connection <- gzfile("results/spot_scores.csv.gz", open = "wt")
+write.csv(spot_scores, spot_connection, row.names = FALSE)
+close(spot_connection)
+
+run_metadata <- data.frame(
+  field = c(
+    "seed", "spots", "genes", "score_assay", "raw_assay", "max_rank",
+    "R", "matrispace", "Seurat", "UCell"
+  ),
+  value = c(
+    264998, ncol(seu), nrow(seu), score_assay, raw_assay, 1500,
+    as.character(getRversion()), as.character(packageVersion("matrispace")),
+    as.character(packageVersion("Seurat")),
+    as.character(packageVersion("UCell"))
+  )
+)
+write.csv(run_metadata, "results/run_metadata.csv", row.names = FALSE)
+method_comparison
+```
+
+## Comparison with expression sums
+
+```{r score-comparison, fig.width=7, fig.height=5}
+comparison_plot_data <- do.call(rbind, lapply(split(spot_scores, spot_scores$signature), function(d) {
+  rbind(
+    data.frame(signature = d$signature, method = "Normalized sum",
+               expression_percentile = percentile(d$normalized_sum),
+               ucell_percentile = percentile(d$ucell)),
+    data.frame(signature = d$signature, method = "Raw sum",
+               expression_percentile = percentile(d$raw_sum),
+               ucell_percentile = percentile(d$ucell))
+  )
+}))
+
+comparison_plot_data$signature <- factor(
+  comparison_plot_data$signature,
+  levels = c("Basement", "Interstitial")
+)
+comparison_plot_data$method <- factor(
+  comparison_plot_data$method,
+  levels = c("Raw sum", "Normalized sum")
+)
+
+ggplot(comparison_plot_data, aes(expression_percentile, ucell_percentile)) +
+  geom_abline(slope = 1, intercept = 0, colour = "grey65", linewidth = 0.35) +
+  geom_point(colour = "#28536B", alpha = 0.18, size = 0.35) +
+  facet_grid(signature ~ method) +
+  coord_equal(xlim = c(0, 100), ylim = c(0, 100), expand = FALSE) +
+  labs(x = "Expression-sum percentile", y = "UCell percentile") +
+  theme_classic(base_size = 9)
+```
+
+## Dominant-gene perturbation
+
+```{r perturbation}
+perturbation <- list()
+row_index <- 1
+
+for (signature in names(signatures)) {
+  genes <- signatures[[signature]]
+  raw_genes <- intersect(genes, rownames(raw_counts))
+  niche_key <- names(signature_labels)[match(signature, signature_labels)]
+  dominant_genes <- head(
+    raw_genes[order(Matrix::rowSums(score_expression[raw_genes, , drop = FALSE]), decreasing = TRUE)],
+    3
+  )
+
+  baseline <- spot_scores[spot_scores$signature == signature, ]
+
+  for (gene in dominant_genes) {
+    for (multiplier in c(2, 5, 10)) {
+      changed_expression <- score_expression
+      changed_expression[gene, ] <- changed_expression[gene, ] * multiplier
+
+      changed_seu <- seu
+      LayerData(changed_seu, assay = score_assay, layer = "data") <- changed_expression
+      changed_seu <- score_ecm_niche_signatures(
+        changed_seu,
+        signatures = setNames(list(genes), niche_key),
+        assay = score_assay,
+        layer = "data",
+        min_genes = 1,
+        maxRank = 1500,
+        overwrite = TRUE
+      )
+      changed_ucell <- as.numeric(
+        get_ecm_niche_signature_scores(changed_seu, niches = niche_key)[
+          niche_key, colnames(seu)
+        ]
+      )
+
+      changed_normalized_sum <- baseline$normalized_sum +
+        (multiplier - 1) * as.numeric(score_expression[gene, ])
+      changed_raw_sum <- baseline$raw_sum +
+        (multiplier - 1) * as.numeric(raw_counts[gene, ])
+
+      changed_scores <- list(
+        UCell = changed_ucell,
+        `Normalized sum` = changed_normalized_sum,
+        `Raw sum` = changed_raw_sum
+      )
+      baseline_scores <- list(
+        UCell = baseline$ucell,
+        `Normalized sum` = baseline$normalized_sum,
+        `Raw sum` = baseline$raw_sum
+      )
+
+      for (method in names(changed_scores)) {
+        perturbation[[row_index]] <- data.frame(
+          signature = signature,
+          gene = gene,
+          multiplier = multiplier,
+          method = method,
+          spearman = cor(baseline_scores[[method]], changed_scores[[method]], method = "spearman"),
+          top10_jaccard = jaccard(
+            top_spots(baseline_scores[[method]]),
+            top_spots(changed_scores[[method]])
+          )
+        )
+        row_index <- row_index + 1
+      }
+    }
+  }
+}
+
+perturbation <- do.call(rbind, perturbation)
+write.csv(perturbation, "results/perturbation_results.csv", row.names = FALSE)
+```
+
+```{r perturbation-stability, fig.width=7, fig.height=4.6}
+perturbation_long <- rbind(
+  data.frame(perturbation[c("signature", "gene", "multiplier", "method")],
+             metric = "Spearman rho", value = perturbation$spearman),
+  data.frame(perturbation[c("signature", "gene", "multiplier", "method")],
+             metric = "Top-10% Jaccard", value = perturbation$top10_jaccard)
+)
+
+summary_groups <- split(
+  perturbation_long,
+  interaction(perturbation_long$signature, perturbation_long$method,
+              perturbation_long$multiplier, perturbation_long$metric, drop = TRUE)
+)
+perturbation_summary <- do.call(rbind, lapply(summary_groups, function(d) {
+  data.frame(
+    signature = d$signature[1], method = d$method[1],
+    multiplier = d$multiplier[1], metric = d$metric[1],
+    median = median(d$value), minimum = min(d$value), maximum = max(d$value)
+  )
+}))
+
+baseline <- expand.grid(
+  signature = c("Basement", "Interstitial"),
+  method = c("UCell", "Normalized sum", "Raw sum"),
+  metric = c("Spearman rho", "Top-10% Jaccard")
+)
+baseline$multiplier <- 1
+baseline$median <- baseline$minimum <- baseline$maximum <- 1
+perturbation_summary <- rbind(perturbation_summary, baseline)
+write.csv(perturbation_summary, "results/perturbation_summary.csv", row.names = FALSE)
+
+method_colours <- c(UCell = "#0072B2", `Normalized sum` = "#009E73", `Raw sum` = "#D55E00")
+
+ggplot(perturbation_summary,
+       aes(multiplier, median, colour = method, fill = method, group = method)) +
+  geom_ribbon(aes(ymin = minimum, ymax = maximum), alpha = 0.10, colour = NA) +
+  geom_line(linewidth = 0.6) +
+  geom_point(size = 1.5) +
+  facet_grid(metric ~ signature, scales = "free_y") +
+  scale_x_continuous(breaks = c(1, 2, 5, 10)) +
+  scale_colour_manual(values = method_colours) +
+  scale_fill_manual(values = method_colours) +
+  labs(x = "Expression multiplier", y = "Agreement with baseline", colour = NULL, fill = NULL) +
+  theme_classic(base_size = 9) +
+  theme(legend.position = "bottom")
+```
+
+## Spatial comparison
+
+```{r spatial-comparison, fig.width=7, fig.height=4.5}
+coordinates <- GetTissueCoordinates(seu)
+coordinate_table <- data.frame(
+  spot_id = rownames(coordinates),
+  x = coordinates$x,
+  y = -coordinates$y
+)
+
+spatial_plot_data <- do.call(rbind, lapply(split(spot_scores, spot_scores$signature), function(d) {
+  rbind(
+    data.frame(spot_id = d$spot_id, signature = d$signature,
+               method = "Raw sum", score = percentile(d$raw_sum)),
+    data.frame(spot_id = d$spot_id, signature = d$signature,
+               method = "Normalized sum", score = percentile(d$normalized_sum)),
+    data.frame(spot_id = d$spot_id, signature = d$signature,
+               method = "UCell", score = percentile(d$ucell))
+  )
+}))
+spatial_plot_data <- merge(spatial_plot_data, coordinate_table, by = "spot_id", sort = FALSE)
+spatial_plot_data$signature <- factor(spatial_plot_data$signature, c("Basement", "Interstitial"))
+spatial_plot_data$method <- factor(spatial_plot_data$method, c("Raw sum", "Normalized sum", "UCell"))
+
+ggplot(spatial_plot_data, aes(x, y, colour = score)) +
+  geom_point(size = 0.42) +
+  facet_grid(signature ~ method) +
+  coord_equal() +
+  scale_colour_gradient2(
+    low = "#5E4FA2", mid = "#FFFFBF", high = "#9E0142",
+    midpoint = 50, limits = c(0, 100), name = "Percentile"
+  ) +
+  theme_void(base_size = 9) +
+  theme(strip.text = element_text(face = "bold"), legend.position = "right")
+```
+
+## Session information
+
+```{r session-information}
+sessionInfo()
+```

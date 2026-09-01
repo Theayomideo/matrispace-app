@@ -1,0 +1,459 @@
+---
+title: "SHG–CosMx collagen validation"
+output: github_document
+params:
+  data_dir: "data"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  fig.path = "figures/",
+  dpi = 300
+)
+
+if (!exists("params")) {
+  params <- list(data_dir = "data")
+}
+
+library(data.table)
+library(ggplot2)
+library(hexbin)
+library(matrispace)
+library(Matrix)
+library(Seurat)
+library(SeuratObject)
+library(tiff)
+
+dir.create("figures", showWarnings = FALSE)
+dir.create("results", showWarnings = FALSE)
+set.seed(15240431)
+```
+
+## CosMx collagen scores
+
+```{r prepare-cosmx}
+expression_file <- file.path(
+  params$data_dir,
+  "cosmx_section04",
+  "Run1129_Section_04_exprMat_file.csv"
+)
+alignment_file <- file.path(params$data_dir, "shg", "section4_aligned_metadata.csv")
+collagen_file <- file.path(params$data_dir, "shg", "Collagen.tif")
+
+expression <- fread(expression_file)
+expression <- expression[cell_ID != 0]
+expression[, barcode := sprintf("section_4_fov_%s_ID_%s", fov, cell_ID)]
+alignment <- fread(alignment_file)
+
+# Retain the cells present in the deposited adjacent-section alignment.
+expression <- expression[match(alignment$barcode, expression$barcode)]
+stopifnot(identical(expression$barcode, alignment$barcode))
+
+id_columns <- c("fov", "cell_ID", "barcode")
+features <- setdiff(names(expression), id_columns)
+controls <- grep(
+  "^(NegPrb|Negative|SystemControl|FalseCode|Control)",
+  features,
+  value = TRUE,
+  ignore.case = TRUE
+)
+genes <- setdiff(features, controls)
+
+counts <- t(as.matrix(expression[, ..genes]))
+storage.mode(counts) <- "double"
+counts <- methods::as(Matrix(counts, sparse = TRUE), "dgCMatrix")
+rownames(counts) <- genes
+colnames(counts) <- alignment$barcode
+rm(expression)
+invisible(gc())
+
+shg <- readTIFF(collagen_file, native = FALSE, as.is = TRUE)
+if (length(dim(shg)) == 3) shg <- shg[, , 1]
+storage.mode(shg) <- "double"
+
+# Map aligned cell coordinates to the 4,000-µm SHG field.
+x_fraction <- (alignment$xc - min(alignment$xc)) / diff(range(alignment$xc))
+y_fraction <- (alignment$yc - min(alignment$yc)) / diff(range(alignment$yc))
+alignment[, image_x := 1 + (1 - x_fraction) * (ncol(shg) - 1)]
+alignment[, image_y := 1 + y_fraction * (nrow(shg) - 1)]
+alignment[, x_um := (image_x - 1) * 4000 / ncol(shg)]
+alignment[, y_um := (image_y - 1) * 4000 / ncol(shg)]
+
+metadata <- data.frame(
+  x_um = alignment$x_um,
+  y_um = alignment$y_um,
+  row.names = alignment$barcode
+)
+
+seu <- CreateSeuratObject(
+  counts = counts,
+  assay = "Spatial",
+  meta.data = metadata,
+  min.cells = 1,
+  min.features = 0,
+  project = "LUAD_SHG_CosMx_validation"
+)
+rm(counts)
+invisible(gc())
+
+seu <- SCTransform(
+  seu,
+  assay = "Spatial",
+  new.assay.name = "SCT",
+  do.correct.umi = TRUE,
+  return.only.var.genes = FALSE,
+  conserve.memory = TRUE,
+  verbose = FALSE
+)
+
+collagen_genes <- matrisome_signatures[["collagens"]]
+sct_data <- LayerData(seu, assay = "SCT", layer = "data")
+measured_collagens <- intersect(collagen_genes, rownames(sct_data))
+
+seu <- score_matrisome(
+  seu,
+  include = "collagens",
+  assay = "SCT",
+  layer = "data",
+  min_genes = 1,
+  maxRank = 1500,
+  overwrite = TRUE
+)
+collagen_scores <- as.numeric(
+  get_matrisome_scores(seu, signatures = "collagens")[
+    "collagens", colnames(seu)
+  ]
+)
+
+cells <- data.table(
+  barcode = colnames(seu),
+  x_um = seu$x_um,
+  y_um = seu$y_um,
+  nFeature_Spatial = seu$nFeature_Spatial,
+  collagen_score = collagen_scores
+)
+
+coverage <- data.frame(
+  signature = "collagens",
+  requested_genes = length(collagen_genes),
+  measured_genes = length(measured_collagens),
+  coverage_fraction = length(measured_collagens) / length(collagen_genes)
+)
+write.csv(coverage, "results/signature_coverage.csv", row.names = FALSE)
+coverage
+```
+
+## Area-matched hexagons
+
+```{r hexagons}
+field_width <- 4000
+pixel_size <- field_width / ncol(shg)
+xbins <- 37L
+minimum_cells <- 10L
+
+cell_hexbin <- hexbin(
+  cells$x_um,
+  cells$y_um,
+  xbins = xbins,
+  xbnds = c(0, field_width),
+  ybnds = c(0, field_width),
+  shape = 1,
+  IDs = TRUE
+)
+
+cell_summary <- data.table(
+  hex_id = cell_hexbin@cID,
+  collagen_score = cells$collagen_score,
+  nFeature_Spatial = cells$nFeature_Spatial
+)[, .(
+  n_cells = .N,
+  collagen_score = mean(collagen_score),
+  nFeature_Spatial = mean(nFeature_Spatial)
+), by = hex_id]
+
+hex_centres <- hcell2xy(cell_hexbin)
+centres <- data.table(
+  hex_id = cell_hexbin@cell,
+  x_um = hex_centres$x,
+  y_um = hex_centres$y
+)
+
+# Assign every SHG pixel to the same hexagonal grid.
+x_coordinates <- (seq_len(ncol(shg)) - 0.5) * pixel_size
+y_coordinates <- (seq_len(nrow(shg)) - 0.5) * pixel_size
+shg_points <- data.table(
+  x_um = rep(x_coordinates, each = nrow(shg)),
+  y_um = rep(y_coordinates, times = ncol(shg)),
+  intensity = as.vector(shg / max(shg))
+)
+
+shg_hexbin <- hexbin(
+  shg_points$x_um,
+  shg_points$y_um,
+  xbins = xbins,
+  xbnds = c(0, field_width),
+  ybnds = c(0, field_width),
+  shape = 1,
+  IDs = TRUE
+)
+
+shg_summary <- data.table(
+  hex_id = shg_hexbin@cID,
+  intensity = shg_points$intensity
+)[, .(shg_mean = mean(intensity)), by = hex_id]
+rm(shg_points)
+invisible(gc())
+
+hexagons <- merge(cell_summary, shg_summary, by = "hex_id")
+hexagons <- merge(hexagons, centres, by = "hex_id")
+hexagons <- hexagons[n_cells >= minimum_cells]
+
+horizontal_width <- field_width / xbins
+hex_side <- horizontal_width / sqrt(3)
+hex_height <- 2 * hex_side
+row_spacing <- 1.5 * hex_side
+hex_area <- sqrt(3) / 2 * horizontal_width^2
+
+hexagons[, cosmx_percentile := (frank(collagen_score) - 0.5) / .N]
+hexagons[, shg_percentile := (frank(shg_mean) - 0.5) / .N]
+hexagons[, joint_collagen_index :=
+  2 * cosmx_percentile * shg_percentile /
+  (cosmx_percentile + shg_percentile)]
+
+# Axial coordinates preserve the hexagonal topology for spatial shifts.
+hexagons[, hex_row := as.integer(round(y_um / row_spacing))]
+hexagons[, hex_col := as.integer(round(
+  (x_um - (hex_row %% 2L) * horizontal_width / 2) / horizontal_width
+))]
+hexagons[, axial_q := hex_col - ((hex_row - (hex_row %% 2L)) %/% 2L)]
+hexagons[, axial_q_mod := axial_q %% cell_hexbin@dimen[[2L]]]
+```
+
+## Spatial association
+
+```{r spatial-statistics}
+spearman <- function(x, y) {
+  cor(x, y, method = "spearman", use = "complete.obs")
+}
+
+partial_spearman <- function(x, y, covariates) {
+  ranked_covariates <- as.data.frame(lapply(as.data.frame(covariates), rank))
+  x_residual <- resid(lm(rank(x) ~ ., data = ranked_covariates))
+  y_residual <- resid(lm(rank(y) ~ ., data = ranked_covariates))
+  cor(x_residual, y_residual)
+}
+
+observed <- spearman(hexagons$collagen_score, hexagons$shg_mean)
+
+# Bootstrap 400-µm spatial blocks.
+bootstrap_data <- copy(hexagons)
+bootstrap_data[, block := paste(floor(x_um / 400), floor(y_um / 400), sep = "_")]
+rows_by_block <- split(seq_len(nrow(bootstrap_data)), bootstrap_data$block)
+blocks <- names(rows_by_block)
+set.seed(15240532)
+bootstrap_correlations <- replicate(1000, {
+  sampled_blocks <- sample(blocks, length(blocks), replace = TRUE)
+  rows <- unlist(rows_by_block[sampled_blocks], use.names = FALSE)
+  spearman(bootstrap_data$collagen_score[rows], bootstrap_data$shg_mean[rows])
+})
+confidence_interval <- quantile(
+  bootstrap_correlations,
+  c(0.025, 0.975),
+  type = 8
+)
+
+# Shift the SHG field while preserving its internal spatial structure.
+ny <- cell_hexbin@dimen[[1L]]
+nx <- cell_hexbin@dimen[[2L]]
+score_matrix <- matrix(NA_real_, nrow = ny, ncol = nx)
+shg_matrix <- matrix(NA_real_, nrow = ny, ncol = nx)
+matrix_index <- cbind(hexagons$hex_row + 1L, hexagons$axial_q_mod + 1L)
+score_matrix[matrix_index] <- hexagons$collagen_score
+shg_matrix[matrix_index] <- hexagons$shg_mean
+
+set.seed(15240633)
+shifts <- data.table(
+  row_shift = sample.int(ny, 999, replace = TRUE) - 1L,
+  column_shift = sample.int(nx, 999, replace = TRUE) - 1L
+)
+zero_shift <- shifts$row_shift == 0L & shifts$column_shift == 0L
+while (any(zero_shift)) {
+  shifts$row_shift[zero_shift] <- sample.int(ny, sum(zero_shift), replace = TRUE) - 1L
+  shifts$column_shift[zero_shift] <- sample.int(nx, sum(zero_shift), replace = TRUE) - 1L
+  zero_shift <- shifts$row_shift == 0L & shifts$column_shift == 0L
+}
+
+null_correlations <- vapply(seq_len(nrow(shifts)), function(i) {
+  rows <- ((seq_len(ny) - 1L + shifts$row_shift[i]) %% ny) + 1L
+  columns <- ((seq_len(nx) - 1L + shifts$column_shift[i]) %% nx) + 1L
+  spearman(as.vector(score_matrix), as.vector(shg_matrix[rows, columns, drop = FALSE]))
+}, numeric(1))
+
+p_value <- (1 + sum(abs(null_correlations) >= abs(observed), na.rm = TRUE)) /
+  (1 + sum(is.finite(null_correlations)))
+
+adjusted_correlation <- partial_spearman(
+  hexagons$collagen_score,
+  hexagons$shg_mean,
+  hexagons[, .(n_cells, nFeature_Spatial)]
+)
+
+inference <- data.frame(
+  spatial_unit = "area-matched regular hexagon",
+  hex_area_um2 = hex_area,
+  minimum_cells = minimum_cells,
+  retained_hexagons = nrow(hexagons),
+  spearman = observed,
+  confidence_interval_low = confidence_interval[1],
+  confidence_interval_high = confidence_interval[2],
+  circular_shift_p = p_value,
+  adjusted_spearman = adjusted_correlation
+)
+
+fwrite(hexagons, "results/hexagon_data.csv.gz")
+write.csv(inference, "results/spatial_inference.csv", row.names = FALSE)
+write.csv(data.frame(bootstrap_spearman = bootstrap_correlations),
+          "results/block_bootstrap.csv", row.names = FALSE)
+write.csv(data.frame(null_spearman = null_correlations),
+          "results/spatial_shift_null.csv", row.names = FALSE)
+
+run_metadata <- data.frame(
+  field = c(
+    "seed", "cells", "genes", "field_width_um", "x_bins", "minimum_cells",
+    "bootstrap_replicates", "shift_replicates", "R", "matrispace", "Seurat", "UCell"
+  ),
+  value = c(
+    15240431, ncol(seu), nrow(seu), field_width, xbins, minimum_cells,
+    length(bootstrap_correlations), length(null_correlations),
+    as.character(getRversion()), as.character(packageVersion("matrispace")),
+    as.character(packageVersion("Seurat")),
+    as.character(packageVersion("UCell"))
+  )
+)
+write.csv(run_metadata, "results/run_metadata.csv", row.names = FALSE)
+inference
+```
+
+## Spatial maps
+
+```{r plot-data, include=FALSE}
+collagen_palette <- c(
+  "#5E4FA2", "#3288BD", "#66C2A5", "#ABDDA4", "#E6F598",
+  "#FFFFBF", "#FEE08B", "#FDAE61", "#F46D43", "#D53E4F", "#9E0142"
+)
+
+map_theme <- theme_void(base_size = 9) +
+  theme(legend.position = "right", plot.margin = margin(0, 0, 0, 0))
+
+add_scale_bar <- function(plot, colour = "black") {
+  plot +
+    annotate("segment", x = 180, xend = 680, y = 3760, yend = 3760,
+             colour = colour, linewidth = 1.2) +
+    annotate("text", x = 430, y = 3680, label = "500~mu*m", parse = TRUE,
+             colour = colour, size = 3)
+}
+
+spatial_coordinates <- list(
+  scale_x_continuous(limits = c(0, field_width), expand = c(0, 0)),
+  scale_y_reverse(limits = c(field_width, 0), expand = c(0, 0)),
+  coord_fixed()
+)
+```
+
+```{r shg-map, fig.width=5, fig.height=4.6}
+plot_rows <- seq(1, nrow(shg), by = 3)
+plot_columns <- seq(1, ncol(shg), by = 3)
+shg_plot_data <- CJ(row = plot_rows, column = plot_columns)
+shg_plot_data[, intensity := shg[cbind(row, column)] / max(shg)]
+shg_plot_data[, x_um := (column - 0.5) * pixel_size]
+shg_plot_data[, y_um := (row - 0.5) * pixel_size]
+display_limit <- quantile(shg_plot_data$intensity, 0.995)
+
+shg_map <- ggplot(shg_plot_data, aes(x_um, y_um, fill = pmin(intensity, display_limit))) +
+  geom_raster() +
+  scale_fill_gradientn(
+    colours = c("#000000", "#003B1F", "#00A34A", "#A6FF8B"),
+    limits = c(0, display_limit),
+    name = "SHG intensity"
+  ) +
+  spatial_coordinates +
+  map_theme
+add_scale_bar(shg_map, "white")
+```
+
+```{r cosmx-map, fig.width=5, fig.height=4.6}
+cosmx_map <- ggplot(cells, aes(x_um, y_um, colour = collagen_score)) +
+  geom_point(size = 0.12, alpha = 0.9) +
+  scale_colour_gradientn(colours = collagen_palette, name = "MatriSpace\ncollagen score") +
+  spatial_coordinates +
+  map_theme
+add_scale_bar(cosmx_map)
+```
+
+```{r joint-index-map, fig.width=5, fig.height=4.6}
+angles <- pi / 6 + (0:5) * pi / 3
+vertices <- data.table(
+  vertex = 1:6,
+  dx = hex_side * cos(angles),
+  dy = hex_side * sin(angles)
+)
+hexagon_polygons <- hexagons[, .(
+  vertex = vertices$vertex,
+  x = x_um + vertices$dx,
+  y = y_um + vertices$dy,
+  joint_collagen_index = joint_collagen_index
+), by = hex_id]
+
+joint_map <- ggplot(
+  hexagon_polygons,
+  aes(x, y, group = hex_id, fill = joint_collagen_index)
+) +
+  geom_polygon(colour = NA) +
+  scale_fill_gradientn(
+    colours = collagen_palette,
+    limits = c(0, 1),
+    name = "Joint collagen\nindex"
+  ) +
+  spatial_coordinates +
+  map_theme
+add_scale_bar(joint_map)
+```
+
+```{r spatial-correlation, fig.width=5.4, fig.height=4.5}
+ggplot(hexagons, aes(collagen_score, shg_mean)) +
+  geom_point(colour = "#355C7D", alpha = 0.32, size = 0.85) +
+  geom_smooth(
+    method = "lm",
+    formula = y ~ x,
+    colour = "#B53636",
+    fill = "#E9A1A1",
+    linewidth = 0.8
+  ) +
+  annotate(
+    "text",
+    x = -Inf,
+    y = Inf,
+    hjust = -0.05,
+    vjust = 1.2,
+    label = sprintf(
+      "rho = %.2f\n95%% CI [%.2f, %.2f]\nP = %.3f\nn = %s",
+      observed,
+      confidence_interval[1],
+      confidence_interval[2],
+      p_value,
+      format(nrow(hexagons), big.mark = ",")
+    ),
+    size = 3.2
+  ) +
+  labs(x = "MatriSpace collagen score", y = "SHG intensity") +
+  theme_classic(base_size = 9)
+```
+
+## Session information
+
+```{r session-information}
+sessionInfo()
+```
