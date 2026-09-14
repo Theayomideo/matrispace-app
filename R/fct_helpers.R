@@ -1965,7 +1965,7 @@ create_ecm_color_map <- function(levels_vector) {
 #'
 #' @param seurat_obj A Seurat object containing the activity assay.
 #' @param assay_name A string specifying the name of the assay to analyze
-#'        (e.g., "LRACTIVITY" or "LIGAND_ACTIVITY").
+#'        (for example, the legacy-compatible "LRACTIVITY" assay).
 #' @param group_by A string specifying the metadata column to use for grouping
 #'        cells (e.g., "seurat_clusters", "ecm_domain_annotation").
 #'
@@ -2009,11 +2009,11 @@ find_lr_markers <- function(seurat_obj, assay_name, group_by) {
 }
 
 
-#' Coalesce Reciprocal Interaction Pairs into Axes
+#' Coalesce Reciprocal Rows into Unique Matrisome Pairs
 #'
-#' Identifies reciprocal pairs (e.g., A-B and B-A) in statistics and mean score
-#' matrices and combines them into a single "Communication Axis" (e.g., A-B_AXIS).
-#' Non-reciprocal pairs are kept as is.
+#' Identifies reciprocal rows (e.g., A-B and B-A) in statistics and mean-score
+#' matrices and combines them into one unordered heterotypic pair (e.g., A-B).
+#' Non-reciprocal pairs are retained under the same canonical naming scheme.
 #'
 #' @param stats_df A long-format dataframe of statistics from `find_lr_markers`.
 #'        Must contain 'feature' and 'cluster' columns.
@@ -2024,7 +2024,7 @@ find_lr_markers <- function(seurat_obj, assay_name, group_by) {
 #'
 coalesce_reciprocal_pairs <- function(stats_df, means_matrix) {
 
-  cat("Coalescing reciprocal interaction pairs into communication axes...\n")
+  cat("Coalescing reciprocal rows into unique matrisome pairs...\n")
 
   # Early return if inputs are empty
   if (nrow(stats_df) == 0 || nrow(means_matrix) == 0) {
@@ -2044,26 +2044,16 @@ coalesce_reciprocal_pairs <- function(stats_df, means_matrix) {
   colnames(means_matrix) <- gsub(" |\\-", "_", colnames(means_matrix))
 
   # STEP 2: Create canonical feature names
-  # Sort L-R pair components alphabetically to identify reciprocal pairs
+  # Sort pair components alphabetically to identify reciprocal rows
   # Example: "TGFB1-TGFBR1" and "TGFBR1-TGFB1" both become "TGFB1-TGFBR1"
   original_features <- rownames(means_matrix)
   canonical_names <- sapply(original_features, function(name) {
     paste(sort(strsplit(name, "-")[[1]]), collapse = "-")
   })
 
-  # STEP 3: Identify reciprocal pairs
-  # Count occurrences - if canonical name appears twice, it's reciprocal
-  name_counts <- table(canonical_names)
-  reciprocal_ids <- names(name_counts[name_counts > 1])
-
-  # STEP 4: Create new feature names
-  # Add "_AXIS" suffix to reciprocal pairs to indicate bidirectional communication
-  # Non-reciprocal pairs keep original names (unidirectional signaling)
-  new_feature_names <- ifelse(
-    canonical_names %in% reciprocal_ids,
-    paste0(canonical_names, "_AXIS"),  # Bidirectional axis
-    original_features                   # Unidirectional interaction
-  )
+  # STEP 3: Use canonical names for every unordered pair. MatriSpace does not
+  # infer directionality or label these co-expression scores as communication.
+  new_feature_names <- canonical_names
 
   # Create mapping dataframe for later joining
   name_map <- data.frame(
@@ -2107,23 +2097,26 @@ coalesce_reciprocal_pairs <- function(stats_df, means_matrix) {
   ))
 }
 
-#' Calculate Spatial Ligand-Receptor Activity Scores (Single-Core with Progress)
+#' Calculate Spatial Matrisome-Pair Co-expression Scores
 #'
-#' This function calculates interaction scores on a single core, designed to be
+#' This function calculates pair scores on a single core, designed to be
 #' called from within a Shiny observer with progress feedback (via shinybusy).
 #' It avoids all parallel backend complexity to ensure stability in any environment.
 #
 #' @param seurat_obj A Seurat object with expression data.
-#' @param lr_db A ligand-receptor database dataframe with columns 'Ligand' and 'Receptor'.
+#' @param lr_db A MatriComDB pair dataframe. The legacy columns `Ligand` and
+#'   `Receptor` identify the two members of each pair; the scoring does not
+#'   imply that every row is a ligand-receptor signaling interaction.
 #' @param adj_matrix A sparse adjacency matrix defining spatial neighbors.
 #' @param assay The assay to use for expression data (default: "SCT").
 #' @param layer The layer to use within the assay (default: "data").
 #' @param update_progress Optional progress update function (e.g., from shinybusy).
 #'        Called at key steps with signature: update_progress(value, text)
-#' @param chunk_size Number of interactions to process per batch (default: 5000).
+#' @param chunk_size Number of pairs to process per batch (default: 5000).
 #'        Lower values reduce peak memory usage but may be slightly slower.
 #'
-#' @return A Seurat object with the new "LRACTIVITY" assay added.
+#' @return A Seurat object with the new "LRACTIVITY" assay added. The assay name
+#'   is retained for compatibility with existing MatriSpace exports.
 #'
 compute_spatial_lr_scores_single_core <- function(seurat_obj, lr_db, adj_matrix, assay = "SCT", layer = "data", update_progress = NULL, chunk_size = 5000) {
 
@@ -2135,21 +2128,21 @@ compute_spatial_lr_scores_single_core <- function(seurat_obj, lr_db, adj_matrix,
     adj_matrix <- adj_matrix[colnames(expr), colnames(expr)]
   }
 
-  # Filter L-R database to only include genes present in this dataset
+  # Keep pairs whose two genes are present in this dataset
   genes_in_data <- rownames(expr)
   lr_db_filtered <- lr_db %>%
     filter(Ligand %in% genes_in_data & Receptor %in% genes_in_data)
 
-  if (nrow(lr_db_filtered) == 0) stop("No valid ligand-receptor pairs found in expression data.")
+  if (nrow(lr_db_filtered) == 0) stop("No valid matrisome pairs were found in the expression data.")
   n_interactions <- nrow(lr_db_filtered)
-  cat("Found", n_interactions, "valid interaction rows to score.\n")
+  cat("Found", n_interactions, "valid matrisome pairs to score.\n")
 
   # Progress update: starting calculation
   if (!is.null(update_progress)) {
     update_progress(value = 0.2, text = "Preparing expression data...")
   }
 
-  # 2. Prepare expression matrix with only LR genes
+  # 2. Prepare expression matrix with only genes represented in the pairs
   lr_genes <- unique(c(lr_db_filtered$Ligand, lr_db_filtered$Receptor))
   expr_lr <- expr[lr_genes, , drop = FALSE]
 
@@ -2175,7 +2168,7 @@ compute_spatial_lr_scores_single_core <- function(seurat_obj, lr_db, adj_matrix,
   gc(verbose = FALSE)
 
   # 4. Process interactions in chunks to control peak memory usage
-  #    This prevents OOM on memory-constrained servers (e.g., shinyapps.io)
+  #    This prevents OOM on memory-constrained hosted deployments
   n_chunks <- ceiling(n_interactions / chunk_size)
   activity_list <- vector("list", n_chunks)
 
@@ -2188,7 +2181,7 @@ compute_spatial_lr_scores_single_core <- function(seurat_obj, lr_db, adj_matrix,
     # Update progress
     if (!is.null(update_progress)) {
       progress_val <- 0.3 + (0.6 * i / n_chunks)
-      update_progress(value = progress_val, text = sprintf("Processing interactions (%d/%d)...", i, n_chunks))
+      update_progress(value = progress_val, text = sprintf("Processing matrisome pairs (%d/%d)...", i, n_chunks))
     }
 
     # Get indices for this chunk

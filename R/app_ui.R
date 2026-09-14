@@ -702,7 +702,7 @@ page_fillable(
                   layout_column_wrap(
                     width = 1/2,  # Equal width columns
 
-                    # Left: Heatmap showing top enriched L-R axes across ALL niches
+                    # Left: Heatmap showing top enriched matrisome pairs across all niches
                     card(
                       card_header("Top enriched matrisome pairs"),
                       card_body(

@@ -2625,7 +2625,7 @@ app_server <- function(input, output, session) {
   })
 
   # ========================================================================== #
-  #                LR ANALYSIS: CLUSTER SELECTOR DROPDOWN                     #
+  #       MATRISOME-PAIR ANALYSIS: CLUSTER SELECTOR DROPDOWN                  #
   # ========================================================================== #
   # Dynamically populates the niche selection dropdown for the volcano plot.
   # Only shows ECM domain annotations (excludes "not.assigned" spots).
@@ -2655,9 +2655,9 @@ app_server <- function(input, output, session) {
   })
 
   # ========================================================================== #
-  #                  SPATIAL LR CO-EXPRESSION ANALYSIS                        #
+  #                SPATIAL MATRISOME-PAIR CO-EXPRESSION                       #
   # ========================================================================== #
-  # Calculates enrichment of ligand-receptor interactions within ECM niches.
+  # Calculates enrichment of MatriComDB pair co-expression within ECM niches.
   # Results stored in rv$lr_results for heatmap and volcano plot.
   # ========================================================================== #
 
@@ -2675,14 +2675,14 @@ app_server <- function(input, output, session) {
 
       update_modal_progress(value = 0.1, text = "Preparing data: building spatial neighbour graph...")
 
-      # Scope the correction to the ligands and receptors in MatriComDB that
-      # are actually present in the assay used for this analysis.
+      # Scope the correction to MatriComDB pair genes that are present in the
+      # assay used for this analysis.
       lr_assay <- if ("SCT" %in% SeuratObject::Assays(d0())) "SCT" else DefaultAssay(d0())
       seurat_obj_local <- leak_apply(
         d0(),
         intersect(unique(c(lr_db$Ligand, lr_db$Receptor)),
                   safe_get_rownames(d0(), assay = lr_assay)),
-        context = "ligand-receptor analysis"
+        context = "matrisome pair analysis"
       )
 
       # ECM domain annotation column name (added by preprocessing or ScType)
@@ -2735,7 +2735,7 @@ app_server <- function(input, output, session) {
       error_msg <- paste0(
         "Matrisome pair analysis failed at sample '", nm(), "'\n",
         "Error: ", e$message, "\n",
-        "Check that 'ecm_domain_annotation' column exists and lr_db is loaded"
+        "Please reload the sample and try the analysis again."
       )
       showNotification(error_msg, type = "error", duration = 15)
       rv$lr_results <- NULL
@@ -2746,11 +2746,11 @@ app_server <- function(input, output, session) {
   }, ignoreInit = TRUE)
 
   # ====================================================================== #
-  #                    LR HEATMAP: OVERVIEW OF TOP AXES                   #
+  #               MATRISOME-PAIR HEATMAP: TOP PAIRS BY NICHE             #
   # ====================================================================== #
   #
-  # Shows the top 10 most enriched L-R communication axes per niche.
-  # Helps identify shared vs. niche-specific signaling pathways.
+  # Shows the top 10 most enriched matrisome pairs per niche.
+  # Helps identify shared and niche-specific pair co-expression patterns.
   #
   output$lr_heatmap_plot <- renderPlot({
     req(rv$lr_results)
@@ -2770,7 +2770,7 @@ app_server <- function(input, output, session) {
     validate(need(nrow(top_axes) > 0, "No significantly enriched matrisome pairs found with current filters."))
 
     # --- MATRIX PREPARATION ---
-    # Build matrix: rows = L-R axes (features), columns = ECM niches (clusters)
+    # Build matrix: rows = matrisome pairs, columns = ECM niches
     # Values = mean co-expression scores across all spots in each niche
     matrix_to_plot <- means_data[unique(top_axes$feature), , drop = FALSE]
     # Remove "not assigned" column (handles both dot and underscore variants)
@@ -2784,26 +2784,26 @@ app_server <- function(input, output, session) {
     pheatmap(
       matrix_to_plot_filtered,
       labels_col = clean_colnames,
-      scale = "row",           # Z-score normalization per row (axis)
+      scale = "row",           # Z-score normalization per pair
                                # Allows comparison of relative enrichment across niches
                                # without being biased by absolute expression levels
       main = "",
-      fontsize_row = 8,        # Small font to fit many L-R axis names
+      fontsize_row = 8,        # Small font to fit many pair names
       fontsize_col = 10,       # Slightly larger for niche names (fewer columns)
       border_color = "grey60",
-      cluster_rows = TRUE,     # Hierarchical clustering groups similar signaling patterns
-      cluster_cols = TRUE,     # Hierarchical clustering groups niches with similar L-R profiles
+      cluster_rows = TRUE,     # Groups pairs with similar enrichment patterns
+      cluster_cols = TRUE,     # Groups niches with similar pair profiles
       angle_col = 45,          # Diagonal labels prevent overlap
       cellwidth = 30,          # Wide enough to read niche names
-      cellheight = 10          # Compact rows to fit all axes
+      cellheight = 10          # Compact rows to fit all pairs
     )
   })
 
   # ====================================================================== #
-  #              LR VOLCANO PLOT: NICHE-SPECIFIC ENRICHMENT              #
+  #        MATRISOME-PAIR VOLCANO PLOT: NICHE-SPECIFIC ENRICHMENT        #
   # ====================================================================== #
   #
-  # Detailed view of all L-R axes for the selected niche.
+  # Detailed view of all matrisome pairs for the selected niche.
   # X-axis: Spatial enrichment (% difference in co-expressing spots)
   # Y-axis: Expression enrichment (log2 fold change in co-expression score)
   #
@@ -2861,6 +2861,11 @@ app_server <- function(input, output, session) {
   })
 
   # --- [ EXPORT ALL (ZIP) ] ---
+  matrisome_coexpression_stats_filename <- "matrisome_coexpression_stats.csv"
+  matrisome_coexpression_means_filename <- "matrisome_coexpression_means.csv"
+  matrisome_coexpression_heatmap_name <- "30_matrisome_coexpression_heatmap"
+  matrisome_coexpression_volcano_prefix <- "31_matrisome_coexpression_volcano_"
+
   output$export_all <- downloadHandler(
     filename = function() {
       paste0("MatriSpace_Export_", gsub(" ", "_", nm()), "_", Sys.Date(), ".zip")
@@ -2958,12 +2963,12 @@ app_server <- function(input, output, session) {
             }, error = function(e){ warning("Failed to export matrisome_scores.csv") })
           }
 
-          # LR CO-EXPRESSION DATA EXPORT - Only if LR analysis was done
+          # Matrisome-pair co-expression data export
           if (!is.null(rv$lr_results)) {
             tryCatch({
-              write.csv(rv$lr_results$stats, file.path(dir_data, "lr_coexpression_stats.csv"), row.names = FALSE)
-              write.csv(rv$lr_results$means, file.path(dir_data, "lr_coexpression_means.csv"))
-            }, error = function(e){ warning("Failed to export LR co-expression data") })
+              write.csv(rv$lr_results$stats, file.path(dir_data, matrisome_coexpression_stats_filename), row.names = FALSE)
+              write.csv(rv$lr_results$means, file.path(dir_data, matrisome_coexpression_means_filename))
+            }, error = function(e){ warning("Failed to export matrisome-pair co-expression data") })
           }
 
           # FULL METADATA EXPORT - Always export
@@ -3153,14 +3158,14 @@ app_server <- function(input, output, session) {
             }, error = function(e){ warning("Failed to export Matrisome/ECM Plots") })
           }
 
-          # LR Co-expression Plots - Only if LR analysis was done
+          # Matrisome-pair co-expression plots
           if (!is.null(rv$lr_results)) {
-            incProgress(0.1, detail = "Exporting LR co-expression plots...")
+            incProgress(0.1, detail = "Exporting matrisome-pair co-expression plots...")
             tryCatch({
               stats_data <- rv$lr_results$stats
               means_data <- rv$lr_results$means
 
-              # LR Heatmap
+              # Matrisome-pair heatmap
               top_axes <- stats_data %>%
                 filter(!grepl("not.assigned|not_assigned", cluster, ignore.case = TRUE)) %>%
                 filter(perc_difference > 0.05 & avg_log2FC > 0.5) %>%
@@ -3174,14 +3179,14 @@ app_server <- function(input, output, session) {
                 clean_colnames <- gsub("_", " ", colnames(matrix_to_plot_filtered))
 
                 # Save heatmap
-                png(file.path(dir_plots_png, "30_lr_heatmap.png"), width = 10, height = 8, units = "in", res = 300)
+                png(file.path(dir_plots_png, paste0(matrisome_coexpression_heatmap_name, ".png")), width = 10, height = 8, units = "in", res = 300)
                 pheatmap(matrix_to_plot_filtered, labels_col = clean_colnames, scale = "row",
                          fontsize_row = 8, fontsize_col = 10, border_color = "grey60",
                          cluster_rows = TRUE, cluster_cols = TRUE, angle_col = 45,
                          cellwidth = 30, cellheight = 10)
                 dev.off()
 
-                pdf(file.path(dir_plots_pdf, "30_lr_heatmap.pdf"), width = 10, height = 8)
+                pdf(file.path(dir_plots_pdf, paste0(matrisome_coexpression_heatmap_name, ".pdf")), width = 10, height = 8)
                 pheatmap(matrix_to_plot_filtered, labels_col = clean_colnames, scale = "row",
                          fontsize_row = 8, fontsize_col = 10, border_color = "grey60",
                          cluster_rows = TRUE, cluster_cols = TRUE, angle_col = 45,
@@ -3189,7 +3194,7 @@ app_server <- function(input, output, session) {
                 dev.off()
               }
 
-              # LR Volcano plots for each niche
+              # Matrisome-pair volcano plots for each niche
               niches <- unique(stats_data$cluster)
               niches <- niches[!grepl("not.assigned|not_assigned", niches, ignore.case = TRUE)]
 
@@ -3221,9 +3226,9 @@ app_server <- function(input, output, session) {
                        x = "% Difference (In vs Out)", y = "Avg Log2 FC") +
                   coord_cartesian(ylim = y_limits)
 
-                save_plot(p_volcano, paste0("31_lr_volcano_", gsub(" ", "_", niche)), width = 8, height = 6)
+                save_plot(p_volcano, paste0(matrisome_coexpression_volcano_prefix, gsub(" ", "_", niche)), width = 8, height = 6)
               }
-            }, error = function(e){ warning("Failed to export LR co-expression plots") })
+            }, error = function(e){ warning("Failed to export matrisome-pair co-expression plots") })
           }
 
           # --- EXPORT SEURAT OBJECT ---
@@ -3270,16 +3275,16 @@ app_server <- function(input, output, session) {
               "  - spatial_statistics_summary.csv: A summary of all calculated correlation statistics."
             )
           }
-          if (!is.null(rv$lr_results) && file.exists(file.path(dir_data, "lr_coexpression_stats.csv"))) {
+          if (!is.null(rv$lr_results) && file.exists(file.path(dir_data, matrisome_coexpression_stats_filename))) {
             data_readme_lines <- c(
               data_readme_lines,
-              "  - lr_coexpression_stats.csv: Ligand-receptor co-expression enrichment statistics per niche."
+              paste0("  - ", matrisome_coexpression_stats_filename, ": Matrisome-pair co-expression enrichment statistics per niche.")
             )
           }
-          if (!is.null(rv$lr_results) && file.exists(file.path(dir_data, "lr_coexpression_means.csv"))) {
+          if (!is.null(rv$lr_results) && file.exists(file.path(dir_data, matrisome_coexpression_means_filename))) {
             data_readme_lines <- c(
               data_readme_lines,
-              "  - lr_coexpression_means.csv: Mean co-expression scores for each L-R axis per niche."
+              paste0("  - ", matrisome_coexpression_means_filename, ": Mean co-expression scores for each matrisome pair per niche.")
             )
           }
           if (file.exists(seurat_export_path)) {
@@ -3572,14 +3577,14 @@ app_server <- function(input, output, session) {
             }, error = function(e) warning("Failed: matrisome plots"))
           }
 
-          # LR Co-expression plots (if LR analysis done)
+          # Matrisome-pair co-expression plots
           if (!is.null(rv$lr_results)) {
-            incProgress(0.1, detail = "LR co-expression plots...")
+            incProgress(0.1, detail = "Matrisome-pair co-expression plots...")
             tryCatch({
               stats_data <- rv$lr_results$stats
               means_data <- rv$lr_results$means
 
-              # LR Heatmap
+              # Matrisome-pair heatmap
               top_axes <- stats_data %>%
                 filter(!grepl("not.assigned|not_assigned", cluster, ignore.case = TRUE)) %>%
                 filter(perc_difference > 0.05 & avg_log2FC > 0.5) %>%
@@ -3592,14 +3597,14 @@ app_server <- function(input, output, session) {
                 matrix_to_plot_filtered <- matrix_to_plot[, cols_to_keep, drop = FALSE]
                 clean_colnames <- gsub("_", " ", colnames(matrix_to_plot_filtered))
 
-                png(file.path(dir_png, "30_lr_heatmap.png"), width = 10, height = 8, units = "in", res = 300)
+                png(file.path(dir_png, paste0(matrisome_coexpression_heatmap_name, ".png")), width = 10, height = 8, units = "in", res = 300)
                 pheatmap(matrix_to_plot_filtered, labels_col = clean_colnames, scale = "row",
                          fontsize_row = 8, fontsize_col = 10, border_color = "grey60",
                          cluster_rows = TRUE, cluster_cols = TRUE, angle_col = 45,
                          cellwidth = 30, cellheight = 10)
                 dev.off()
 
-                pdf(file.path(dir_pdf, "30_lr_heatmap.pdf"), width = 10, height = 8)
+                pdf(file.path(dir_pdf, paste0(matrisome_coexpression_heatmap_name, ".pdf")), width = 10, height = 8)
                 pheatmap(matrix_to_plot_filtered, labels_col = clean_colnames, scale = "row",
                          fontsize_row = 8, fontsize_col = 10, border_color = "grey60",
                          cluster_rows = TRUE, cluster_cols = TRUE, angle_col = 45,
@@ -3607,7 +3612,7 @@ app_server <- function(input, output, session) {
                 dev.off()
               }
 
-              # LR Volcano plots for each niche
+              # Matrisome-pair volcano plots for each niche
               niches <- unique(stats_data$cluster)
               niches <- niches[!grepl("not.assigned|not_assigned", niches, ignore.case = TRUE)]
 
@@ -3639,9 +3644,9 @@ app_server <- function(input, output, session) {
                        x = "% Difference (In vs Out)", y = "Avg Log2 FC") +
                   coord_cartesian(ylim = y_limits)
 
-                save_plot(p_volcano, paste0("31_lr_volcano_", gsub(" ", "_", niche)), width = 8, height = 6)
+                save_plot(p_volcano, paste0(matrisome_coexpression_volcano_prefix, gsub(" ", "_", niche)), width = 8, height = 6)
               }
-            }, error = function(e) warning("Failed: LR plots"))
+            }, error = function(e) warning("Failed: matrisome-pair plots"))
           }
 
           # Create ZIP

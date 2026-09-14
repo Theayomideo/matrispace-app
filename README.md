@@ -63,7 +63,7 @@ Results are presented as spatial distribution maps and hotspot maps, each accomp
 
 **ECM niche classification.** Each spot is classified into Interstitial or Basement membrane ECM niches. Niche assignments and per-spot niche scores are visualized on an interactive spatial viewer.
 
-**Spatial ligand-receptor co-expression.** ECM-focused interaction pairs from [MatriComDB](https://github.com/Izzilab/MatriCom) are evaluated by computing spatial co-expression scores within and across ECM niches, and visualized as interactive heatmaps and volcano plots.
+**Spatial co-expression of matrisome pairs.** Unique heterotypic pairs from [MatriComDB](https://github.com/Izzilab/MatriCom), in which at least one member is a matrisome gene, are evaluated across adjacent spots and summarized within ECM niches. Results are visualized as interactive heatmaps and volcano plots.
 
 ### Feature Analysis
 

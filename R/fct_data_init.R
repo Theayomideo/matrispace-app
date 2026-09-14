@@ -13,22 +13,27 @@ initialize_reference_data <- function() {
   # Load curated ECM niche signatures (not derivable from matrisome_v2)
   ecm_ucell_signatures <- readRDS(extdata_path("ecm_ucell_signatures.rds"))
 
-  # Load LR database for spatial co-expression analysis
+  # Load the MatriComDB pair database for spatial co-expression analysis
   lr_db <- readRDS(extdata_path("ultimate_ecm_interactions_DEDUPLICATED.rds"))
 
-  # MatriComDB contains both directional ligand-receptor relationships and
-  # undirected physical interactions. Represent every interaction once as an
-  # alphabetically ordered protein-pair axis and remove self-interactions.
+  # MatriComDB contains ECM ligand-receptor relationships, structural
+  # heteromeric interactions, and homomeric assemblies. MatriSpace scores
+  # pairwise spatial co-expression rather than directionality, so exclude
+  # homomeric rows and collapse reciprocal rows to one unique heterotypic pair.
   lr_db <- lr_db %>%
-    filter(Ligand != Receptor) %>%
-    mutate(
-      .axis_gene_1 = pmin(Ligand, Receptor),
-      .axis_gene_2 = pmax(Ligand, Receptor)
+    filter(
+      !is.na(Ligand), !is.na(Receptor),
+      nzchar(Ligand), nzchar(Receptor),
+      Ligand != Receptor
     ) %>%
-    group_by(.axis_gene_1, .axis_gene_2) %>%
+    mutate(
+      .pair_gene_1 = pmin(Ligand, Receptor),
+      .pair_gene_2 = pmax(Ligand, Receptor)
+    ) %>%
+    group_by(.pair_gene_1, .pair_gene_2) %>%
     summarise(
-      Ligand = dplyr::first(.axis_gene_1),
-      Receptor = dplyr::first(.axis_gene_2),
+      Ligand = dplyr::first(.pair_gene_1),
+      Receptor = dplyr::first(.pair_gene_2),
       Interaction_Type = paste(sort(unique(Interaction_Type)), collapse = "; "),
       Source = paste(sort(unique(Source)), collapse = "; "),
       Database_Score = max(Database_Score),
