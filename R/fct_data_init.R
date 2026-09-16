@@ -14,8 +14,7 @@ initialize_reference_data <- function() {
   ecm_ucell_signatures <- readRDS(extdata_path("ecm_ucell_signatures.rds"))
 
   # Load the MatriComDB pair database for spatial co-expression analysis
-  matrisome_pairs <- readRDS(extdata_path("ultimate_ecm_interactions_DEDUPLICATED.rds"))
-  names(matrisome_pairs)[seq_len(2)] <- c("Gene1", "Gene2")
+  matrisome_pairs <- readRDS(extdata_path("matrisome_pairs.rds"))
 
   # MatriComDB contains multiple annotated interaction classes, including
   # structural heteromeric interactions and homomeric assemblies. MatriSpace
