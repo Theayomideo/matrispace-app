@@ -5,7 +5,7 @@
 #' Called once at server startup.
 #'
 #' @return A named list containing all reference data objects:
-#'   matrisome, mobj, recs, lr_db, ecm_ucell_signatures,
+#'   matrisome, mobj, recs, matrisome_pairs, ecm_ucell_signatures,
 #'   matrisome_feature_signatures, ecm_quotes
 #' @noRd
 initialize_reference_data <- function() {
@@ -14,32 +14,33 @@ initialize_reference_data <- function() {
   ecm_ucell_signatures <- readRDS(extdata_path("ecm_ucell_signatures.rds"))
 
   # Load the MatriComDB pair database for spatial co-expression analysis
-  lr_db <- readRDS(extdata_path("ultimate_ecm_interactions_DEDUPLICATED.rds"))
+  matrisome_pairs <- readRDS(extdata_path("ultimate_ecm_interactions_DEDUPLICATED.rds"))
+  names(matrisome_pairs)[seq_len(2)] <- c("Gene1", "Gene2")
 
-  # MatriComDB contains ECM ligand-receptor relationships, structural
-  # heteromeric interactions, and homomeric assemblies. MatriSpace scores
-  # pairwise spatial co-expression rather than directionality, so exclude
-  # homomeric rows and collapse reciprocal rows to one unique heterotypic pair.
-  lr_db <- lr_db %>%
+  # MatriComDB contains multiple annotated interaction classes, including
+  # structural heteromeric interactions and homomeric assemblies. MatriSpace
+  # scores pairwise spatial co-expression rather than directionality, so
+  # exclude homomeric rows and collapse reciprocal rows to one unique pair.
+  matrisome_pairs <- matrisome_pairs %>%
     filter(
-      !is.na(Ligand), !is.na(Receptor),
-      nzchar(Ligand), nzchar(Receptor),
-      Ligand != Receptor
+      !is.na(Gene1), !is.na(Gene2),
+      nzchar(Gene1), nzchar(Gene2),
+      Gene1 != Gene2
     ) %>%
     mutate(
-      .pair_gene_1 = pmin(Ligand, Receptor),
-      .pair_gene_2 = pmax(Ligand, Receptor)
+      .pair_gene_1 = pmin(Gene1, Gene2),
+      .pair_gene_2 = pmax(Gene1, Gene2)
     ) %>%
     group_by(.pair_gene_1, .pair_gene_2) %>%
     summarise(
-      Ligand = dplyr::first(.pair_gene_1),
-      Receptor = dplyr::first(.pair_gene_2),
+      Gene1 = dplyr::first(.pair_gene_1),
+      Gene2 = dplyr::first(.pair_gene_2),
       Interaction_Type = paste(sort(unique(Interaction_Type)), collapse = "; "),
       Source = paste(sort(unique(Source)), collapse = "; "),
       Database_Score = max(Database_Score),
       .groups = "drop"
     ) %>%
-    select(Ligand, Receptor, Interaction_Type, Source, Database_Score)
+    select(Gene1, Gene2, Interaction_Type, Source, Database_Score)
 
   # Matrisome reference (single source of truth for all matrisome data)
   matrisome <- readRDS(extdata_path("matrisome_v2.rds"))
@@ -110,7 +111,7 @@ initialize_reference_data <- function() {
     matrisome = matrisome,
     mobj = mobj,
     recs = recs,
-    lr_db = lr_db,
+    matrisome_pairs = matrisome_pairs,
     ecm_ucell_signatures = ecm_ucell_signatures,
     matrisome_feature_signatures = matrisome_feature_signatures,
     ecm_quotes = ecm_quotes

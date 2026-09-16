@@ -13,7 +13,7 @@ app_server <- function(input, output, session) {
     data_is_loaded = FALSE,
     feature_analysis_done = FALSE,
     matrisome_analysis_done = FALSE,
-    lr_results = NULL,
+    matrisome_pair_results = NULL,
     is_visiumv2_origin = FALSE,
     custom_gene_sets = list(),
     primary_contrast_state = "none",
@@ -38,7 +38,7 @@ app_server <- function(input, output, session) {
   matrisome <- ref_data$matrisome
   mobj <- ref_data$mobj
   recs <- ref_data$recs
-  lr_db <- ref_data$lr_db
+  matrisome_pairs <- ref_data$matrisome_pairs
   ecm_ucell_signatures <- ref_data$ecm_ucell_signatures
   matrisome_feature_signatures <- ref_data$matrisome_feature_signatures
   ecm_quotes <- ref_data$ecm_quotes
@@ -252,7 +252,7 @@ app_server <- function(input, output, session) {
   shinyjs::disable("corsel")
   shinyjs::disable("trg")
   shinyjs::disable("extinfo")
-  shinyjs::disable("run_lr_analysis")
+  shinyjs::disable("run_matrisome_pair_analysis")
 
   # ---------------------------------------------------------------------------
   # DATA LOADING & PROCESSING
@@ -271,7 +271,7 @@ app_server <- function(input, output, session) {
       rv$analysis_results <- NULL
       rv$feature_analysis_done <- FALSE
       rv$matrisome_analysis_done <- FALSE
-      rv$lr_results <- NULL
+      rv$matrisome_pair_results <- NULL
       nav_select("main_content", "load_data")
       shinyjs::runjs("$('#export_dropdown_btn').prop('disabled', true).addClass('initially-disabled');")
       updateRadioButtons(session, "sel1", selected = character(0))
@@ -542,7 +542,7 @@ app_server <- function(input, output, session) {
     if (!isTRUE(rv$data_is_loaded)) return()
     rv$analysis_results        <- NULL
     rv$matrisome_results       <- NULL
-    rv$lr_results              <- NULL
+    rv$matrisome_pair_results  <- NULL
     rv$feature_analysis_done   <- FALSE
     rv$matrisome_analysis_done <- FALSE
     showNotification(
@@ -1449,9 +1449,9 @@ app_server <- function(input, output, session) {
     shinyjs::enable("run_button")
     shinyjs::enable("run_matrisome_profile")
     if ("ecm_domain_annotation" %in% colnames(d0()@meta.data)) {
-      shinyjs::enable("run_lr_analysis")
+      shinyjs::enable("run_matrisome_pair_analysis")
     } else {
-      shinyjs::disable("run_lr_analysis")
+      shinyjs::disable("run_matrisome_pair_analysis")
     }
 
     # Reset selections when new data is loaded
@@ -2631,7 +2631,7 @@ app_server <- function(input, output, session) {
   # Only shows ECM domain annotations (excludes "not.assigned" spots).
   # ========================================================================== #
 
-  output$lr_cluster_selector_ui <- renderUI({
+  output$matrisome_pair_cluster_selector_ui <- renderUI({
     req(rv$data_is_loaded)
 
     # Validate that ECM annotation column exists (added during preprocessing or manually)
@@ -2647,7 +2647,7 @@ app_server <- function(input, output, session) {
 
     # Create dropdown (sorted alphabetically for easy navigation)
     selectInput(
-      "lr_cluster_select",
+      "matrisome_pair_cluster_select",
       "Focus volcano plot on:",
       choices = sort(cluster_choices),
       selected = cluster_choices[1]  # Default to first alphabetically
@@ -2658,14 +2658,14 @@ app_server <- function(input, output, session) {
   #                SPATIAL MATRISOME-PAIR CO-EXPRESSION                       #
   # ========================================================================== #
   # Calculates enrichment of MatriComDB pair co-expression within ECM niches.
-  # Results stored in rv$lr_results for heatmap and volcano plot.
+  # Results are stored for the heatmap and volcano plot.
   # ========================================================================== #
 
-  observeEvent(input$run_lr_analysis, {
-    req(d0(), "ecm_domain_annotation" %in% colnames(d0()@meta.data), lr_db)
+  observeEvent(input$run_matrisome_pair_analysis, {
+    req(d0(), "ecm_domain_annotation" %in% colnames(d0()@meta.data), matrisome_pairs)
 
     # Disable the button to prevent re-clicks
-    shinyjs::disable("run_lr_analysis")
+    shinyjs::disable("run_matrisome_pair_analysis")
 
     # Show progress modal (shinybusy)
     show_modal_progress_line(text = "Starting matrisome pair analysis...")
@@ -2677,11 +2677,13 @@ app_server <- function(input, output, session) {
 
       # Scope the correction to MatriComDB pair genes that are present in the
       # assay used for this analysis.
-      lr_assay <- if ("SCT" %in% SeuratObject::Assays(d0())) "SCT" else DefaultAssay(d0())
+      pair_assay <- if ("SCT" %in% SeuratObject::Assays(d0())) "SCT" else DefaultAssay(d0())
       seurat_obj_local <- leak_apply(
         d0(),
-        intersect(unique(c(lr_db$Ligand, lr_db$Receptor)),
-                  safe_get_rownames(d0(), assay = lr_assay)),
+        intersect(
+          unique(c(matrisome_pairs$Gene1, matrisome_pairs$Gene2)),
+          safe_get_rownames(d0(), assay = pair_assay)
+        ),
         context = "matrisome pair analysis"
       )
 
@@ -2693,31 +2695,39 @@ app_server <- function(input, output, session) {
       seurat_obj_local[[grouping_var]] <- gsub(" |\\-", "_", seurat_obj_local[[grouping_var, drop = TRUE]])
 
       # Build spatial adjacency matrix from tissue coordinates
-      lr_coords <- GetTissueCoordinates(seurat_obj_local)
+      pair_coords <- GetTissueCoordinates(seurat_obj_local)
       # Handle VisiumV2 coordinate column names (x/y instead of imagecol/imagerow)
-      if(!all(c("imagerow","imagecol")%in%colnames(lr_coords))){
-        lr_coords$imagerow <- lr_coords$x
-        lr_coords$imagecol <- lr_coords$y
+      if(!all(c("imagerow","imagecol")%in%colnames(pair_coords))){
+        pair_coords$imagerow <- pair_coords$x
+        pair_coords$imagecol <- pair_coords$y
       }
-      lr_coords <- lr_coords[,colnames(lr_coords)%in%c("imagerow","imagecol")]
-      adj_matrix <- getSpatialNeighbors(lr_coords)
+      pair_coords <- pair_coords[,colnames(pair_coords)%in%c("imagerow","imagecol")]
+      adj_matrix <- getSpatialNeighbors(pair_coords)
 
-      seurat_with_scores <- compute_spatial_lr_scores_single_core(
+      seurat_with_scores <- compute_spatial_matrisome_pair_scores_single_core(
         seurat_obj = seurat_obj_local,
-        lr_db      = lr_db,
+        pair_db    = matrisome_pairs,
         adj_matrix = adj_matrix,
-        assay      = lr_assay,
+        assay      = pair_assay,
         update_progress = update_modal_progress  # Pass shinybusy function for progress updates
       )
 
-      rm(seurat_obj_local, adj_matrix, lr_coords)
+      rm(seurat_obj_local, adj_matrix, pair_coords)
       gc(verbose = FALSE)
 
       update_modal_progress(value = 0.85, text = "Calculating enrichment: comparing niches...")
-      interaction_stats <- find_lr_markers(seurat_with_scores, "LRACTIVITY", grouping_var)
+      interaction_stats <- find_matrisome_pair_enrichment(
+        seurat_with_scores,
+        "MATRISOMEPAIR",
+        grouping_var
+      )
 
       update_modal_progress(value = 0.95, text = "Finalising results...")
-      mean_interaction_scores <- AverageExpression(seurat_with_scores, assays = "LRACTIVITY", group.by = grouping_var)[[1]]
+      mean_interaction_scores <- AverageExpression(
+        seurat_with_scores,
+        assays = "MATRISOMEPAIR",
+        group.by = grouping_var
+      )[[1]]
 
       interaction_results <- list(
         stats = interaction_stats,
@@ -2728,7 +2738,7 @@ app_server <- function(input, output, session) {
       gc(verbose = FALSE)
 
       # Store results for plotting (triggers heatmap and volcano plot rendering)
-      rv$lr_results <- interaction_results
+      rv$matrisome_pair_results <- interaction_results
 
     }, error = function(e) {
       # Include context to help debug failures
@@ -2738,10 +2748,10 @@ app_server <- function(input, output, session) {
         "Please reload the sample and try the analysis again."
       )
       showNotification(error_msg, type = "error", duration = 15)
-      rv$lr_results <- NULL
+      rv$matrisome_pair_results <- NULL
     }, finally = {
       remove_modal_progress()
-      shinyjs::enable("run_lr_analysis")
+      shinyjs::enable("run_matrisome_pair_analysis")
     })
   }, ignoreInit = TRUE)
 
@@ -2752,12 +2762,12 @@ app_server <- function(input, output, session) {
   # Shows the top 10 most enriched matrisome pairs per niche.
   # Helps identify shared and niche-specific pair co-expression patterns.
   #
-  output$lr_heatmap_plot <- renderPlot({
-    req(rv$lr_results)
+  output$matrisome_pair_heatmap_plot <- renderPlot({
+    req(rv$matrisome_pair_results)
 
     # Extract enrichment statistics and mean expression values
-    stats_data <- rv$lr_results$stats
-    means_data <- rv$lr_results$means
+    stats_data <- rv$matrisome_pair_results$stats
+    means_data <- rv$matrisome_pair_results$means
 
     # Filter by significance: >5% spatial enrichment, >0.5 log2FC, top 10 per niche
     top_axes <- stats_data %>%
@@ -2807,16 +2817,19 @@ app_server <- function(input, output, session) {
   # X-axis: Spatial enrichment (% difference in co-expressing spots)
   # Y-axis: Expression enrichment (log2 fold change in co-expression score)
   #
-  output$lr_volcano_plot <- renderPlot({
-    req(rv$lr_results, input$lr_cluster_select)
+  output$matrisome_pair_volcano_plot <- renderPlot({
+    req(rv$matrisome_pair_results, input$matrisome_pair_cluster_select)
 
     # Standardize niche name to match analysis results (spaces/hyphens → underscores)
-    selected_cluster_clean <- gsub(" |\\-", "_", input$lr_cluster_select)
-    display_niche <- trimws(gsub("\\s+", " ", gsub("_+", " ", input$lr_cluster_select)))
+    selected_cluster_clean <- gsub(" |\\-", "_", input$matrisome_pair_cluster_select)
+    display_niche <- trimws(gsub("\\s+", " ", gsub("_+", " ", input$matrisome_pair_cluster_select)))
 
     # Filter statistics to selected niche
-    stats_subset <- rv$lr_results$stats %>% filter(cluster == selected_cluster_clean)
-    validate(need(nrow(stats_subset) > 0, paste("No data available for niche:", input$lr_cluster_select)))
+    stats_subset <- rv$matrisome_pair_results$stats %>% filter(cluster == selected_cluster_clean)
+    validate(need(
+      nrow(stats_subset) > 0,
+      paste("No data available for niche:", input$matrisome_pair_cluster_select)
+    ))
 
     # --- IDENTIFY TOP HITS FOR LABELING ---
     # Apply same significance filters as heatmap (perc_difference > 0.05, avg_log2FC > 0.5)
@@ -2964,10 +2977,10 @@ app_server <- function(input, output, session) {
           }
 
           # Matrisome-pair co-expression data export
-          if (!is.null(rv$lr_results)) {
+          if (!is.null(rv$matrisome_pair_results)) {
             tryCatch({
-              write.csv(rv$lr_results$stats, file.path(dir_data, matrisome_coexpression_stats_filename), row.names = FALSE)
-              write.csv(rv$lr_results$means, file.path(dir_data, matrisome_coexpression_means_filename))
+              write.csv(rv$matrisome_pair_results$stats, file.path(dir_data, matrisome_coexpression_stats_filename), row.names = FALSE)
+              write.csv(rv$matrisome_pair_results$means, file.path(dir_data, matrisome_coexpression_means_filename))
             }, error = function(e){ warning("Failed to export matrisome-pair co-expression data") })
           }
 
@@ -3159,11 +3172,11 @@ app_server <- function(input, output, session) {
           }
 
           # Matrisome-pair co-expression plots
-          if (!is.null(rv$lr_results)) {
+          if (!is.null(rv$matrisome_pair_results)) {
             incProgress(0.1, detail = "Exporting matrisome-pair co-expression plots...")
             tryCatch({
-              stats_data <- rv$lr_results$stats
-              means_data <- rv$lr_results$means
+              stats_data <- rv$matrisome_pair_results$stats
+              means_data <- rv$matrisome_pair_results$means
 
               # Matrisome-pair heatmap
               top_axes <- stats_data %>%
@@ -3275,13 +3288,13 @@ app_server <- function(input, output, session) {
               "  - spatial_statistics_summary.csv: A summary of all calculated correlation statistics."
             )
           }
-          if (!is.null(rv$lr_results) && file.exists(file.path(dir_data, matrisome_coexpression_stats_filename))) {
+          if (!is.null(rv$matrisome_pair_results) && file.exists(file.path(dir_data, matrisome_coexpression_stats_filename))) {
             data_readme_lines <- c(
               data_readme_lines,
               paste0("  - ", matrisome_coexpression_stats_filename, ": Matrisome-pair co-expression enrichment statistics per niche.")
             )
           }
-          if (!is.null(rv$lr_results) && file.exists(file.path(dir_data, matrisome_coexpression_means_filename))) {
+          if (!is.null(rv$matrisome_pair_results) && file.exists(file.path(dir_data, matrisome_coexpression_means_filename))) {
             data_readme_lines <- c(
               data_readme_lines,
               paste0("  - ", matrisome_coexpression_means_filename, ": Mean co-expression scores for each matrisome pair per niche.")
@@ -3578,11 +3591,11 @@ app_server <- function(input, output, session) {
           }
 
           # Matrisome-pair co-expression plots
-          if (!is.null(rv$lr_results)) {
+          if (!is.null(rv$matrisome_pair_results)) {
             incProgress(0.1, detail = "Matrisome-pair co-expression plots...")
             tryCatch({
-              stats_data <- rv$lr_results$stats
-              means_data <- rv$lr_results$means
+              stats_data <- rv$matrisome_pair_results$stats
+              means_data <- rv$matrisome_pair_results$means
 
               # Matrisome-pair heatmap
               top_axes <- stats_data %>%

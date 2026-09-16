@@ -674,13 +674,13 @@ page_fillable(
                     width = "250px",
                     h5("Plot options"),
 
-                    # Dynamic dropdown: populated by server.R output$lr_cluster_selector_ui
+                    # Dynamic dropdown populated by the server for pair analysis
                     # Filters volcano plot to show enrichment for selected ECM niche
-                    uiOutput("lr_cluster_selector_ui"),
+                    uiOutput("matrisome_pair_cluster_selector_ui"),
 
                     # Warning alert: informs user of computation time
                     div(
-                      class = "alert alert-warning text-center p-2 mt-3 lr-warning-alert",
+                      class = "alert alert-warning text-center p-2 mt-3 matrisome-pair-warning-alert",
                       tags$strong(bsicons::bs_icon("hourglass-split"), " Computation Time"),
                       p(
                         class = "mt-1 mb-0",
@@ -691,7 +691,7 @@ page_fillable(
                     # Analysis trigger button
                     # Disabled during analysis via shinyjs (see server.R observeEvent)
                     actionButton(
-                      "run_lr_analysis",
+                      "run_matrisome_pair_analysis",
                       "Calculate pair scores",
                       icon = icon("cogs"),
                       class = "btn-primary w-100 mt-3"
@@ -707,7 +707,7 @@ page_fillable(
                       card_header("Top enriched matrisome pairs"),
                       card_body(
                         shinycssloaders::withSpinner(  # Loading indicator during rendering
-                          plotOutput("lr_heatmap_plot", height = "600px")
+                          plotOutput("matrisome_pair_heatmap_plot", height = "600px")
                         )
                       )
                     ),
@@ -717,7 +717,7 @@ page_fillable(
                       card_header("Matrisome pair volcano plot"),
                       card_body(
                         shinycssloaders::withSpinner(
-                          plotOutput("lr_volcano_plot", height = "600px")
+                          plotOutput("matrisome_pair_volcano_plot", height = "600px")
                         )
                       )
                     )

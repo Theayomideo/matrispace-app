@@ -1957,21 +1957,21 @@ create_ecm_color_map <- function(levels_vector) {
   return(color_map)
 }
 
-#' Find Enriched Markers in an Activity Assay
+#' Find Matrisome-Pair Enrichment
 #'
 #' This function calculates enrichment statistics (avg_log2FC and percentage
 #' difference) for features in a given activity assay, comparing each group
 #' (cluster) to all other groups.
 #'
-#' @param seurat_obj A Seurat object containing the activity assay.
+#' @param seurat_obj A Seurat object containing the matrisome-pair assay.
 #' @param assay_name A string specifying the name of the assay to analyze
-#'        (for example, the legacy-compatible "LRACTIVITY" assay).
+#'        (for example, the "MATRISOMEPAIR" assay).
 #' @param group_by A string specifying the metadata column to use for grouping
 #'        cells (e.g., "seurat_clusters", "ecm_domain_annotation").
 #'
 #' @return A tidy dataframe with enrichment statistics for each feature in each group.
 #'         Columns: feature, cluster, avg_log2FC, perc_difference, pct.1, pct.2
-find_lr_markers <- function(seurat_obj, assay_name, group_by) {
+find_matrisome_pair_enrichment <- function(seurat_obj, assay_name, group_by) {
 
   cat(sprintf("Calculating enrichment for assay '%s' grouped by '%s'...\n", assay_name, group_by))
 
@@ -2015,7 +2015,8 @@ find_lr_markers <- function(seurat_obj, assay_name, group_by) {
 #' matrices and combines them into one unordered heterotypic pair (e.g., A-B).
 #' Non-reciprocal pairs are retained under the same canonical naming scheme.
 #'
-#' @param stats_df A long-format dataframe of statistics from `find_lr_markers`.
+#' @param stats_df A long-format dataframe of statistics from
+#'   `find_matrisome_pair_enrichment`.
 #'        Must contain 'feature' and 'cluster' columns.
 #' @param means_matrix A wide-format matrix of mean scores, with features as
 #'        rows and clusters as columns.
@@ -2104,9 +2105,8 @@ coalesce_reciprocal_pairs <- function(stats_df, means_matrix) {
 #' It avoids all parallel backend complexity to ensure stability in any environment.
 #
 #' @param seurat_obj A Seurat object with expression data.
-#' @param lr_db A MatriComDB pair dataframe. The legacy columns `Ligand` and
-#'   `Receptor` identify the two members of each pair; the scoring does not
-#'   imply that every row is a ligand-receptor signaling interaction.
+#' @param pair_db A MatriComDB pair dataframe. The `Gene1` and `Gene2` columns
+#'   identify the two members of each pair.
 #' @param adj_matrix A sparse adjacency matrix defining spatial neighbors.
 #' @param assay The assay to use for expression data (default: "SCT").
 #' @param layer The layer to use within the assay (default: "data").
@@ -2115,10 +2115,9 @@ coalesce_reciprocal_pairs <- function(stats_df, means_matrix) {
 #' @param chunk_size Number of pairs to process per batch (default: 5000).
 #'        Lower values reduce peak memory usage but may be slightly slower.
 #'
-#' @return A Seurat object with the new "LRACTIVITY" assay added. The assay name
-#'   is retained for compatibility with existing MatriSpace exports.
+#' @return A Seurat object with the new "MATRISOMEPAIR" assay added.
 #'
-compute_spatial_lr_scores_single_core <- function(seurat_obj, lr_db, adj_matrix, assay = "SCT", layer = "data", update_progress = NULL, chunk_size = 5000) {
+compute_spatial_matrisome_pair_scores_single_core <- function(seurat_obj, pair_db, adj_matrix, assay = "SCT", layer = "data", update_progress = NULL, chunk_size = 5000) {
 
   # 1. Prepare data
   expr <- LayerData(seurat_obj, assay = assay, layer = layer)
@@ -2130,12 +2129,12 @@ compute_spatial_lr_scores_single_core <- function(seurat_obj, lr_db, adj_matrix,
 
   # Keep pairs whose two genes are present in this dataset
   genes_in_data <- rownames(expr)
-  lr_db_filtered <- lr_db %>%
-    filter(Ligand %in% genes_in_data & Receptor %in% genes_in_data)
+  pair_db_filtered <- pair_db %>%
+    filter(Gene1 %in% genes_in_data & Gene2 %in% genes_in_data)
 
-  if (nrow(lr_db_filtered) == 0) stop("No valid matrisome pairs were found in the expression data.")
-  n_interactions <- nrow(lr_db_filtered)
-  cat("Found", n_interactions, "valid matrisome pairs to score.\n")
+  if (nrow(pair_db_filtered) == 0) stop("No valid matrisome pairs were found in the expression data.")
+  n_pairs <- nrow(pair_db_filtered)
+  cat("Found", n_pairs, "valid matrisome pairs to score.\n")
 
   # Progress update: starting calculation
   if (!is.null(update_progress)) {
@@ -2143,16 +2142,16 @@ compute_spatial_lr_scores_single_core <- function(seurat_obj, lr_db, adj_matrix,
   }
 
   # 2. Prepare expression matrix with only genes represented in the pairs
-  lr_genes <- unique(c(lr_db_filtered$Ligand, lr_db_filtered$Receptor))
-  expr_lr <- expr[lr_genes, , drop = FALSE]
+  pair_genes <- unique(c(pair_db_filtered$Gene1, pair_db_filtered$Gene2))
+  expr_pairs <- expr[pair_genes, , drop = FALSE]
 
   # Ensure sparse matrix format (dgCMatrix) for efficient operations
-  if (!inherits(expr_lr, "dgCMatrix")) {
-    expr_lr <- as(expr_lr, "dgCMatrix")
+  if (!inherits(expr_pairs, "dgCMatrix")) {
+    expr_pairs <- as(expr_pairs, "dgCMatrix")
   }
 
   # Apply sqrt transformation directly on sparse matrix's data slot
-  expr_lr@x <- sqrt(pmax(expr_lr@x, 0))
+  expr_pairs@x <- sqrt(pmax(expr_pairs@x, 0))
 
   # Sparsify adjacency matrix for efficient multiplication
   adj_matrix <- as(adj_matrix, "dgCMatrix")
@@ -2161,7 +2160,7 @@ compute_spatial_lr_scores_single_core <- function(seurat_obj, lr_db, adj_matrix,
   if (!is.null(update_progress)) {
     update_progress(value = 0.3, text = "Computing neighbour expression...")
   }
-  neighbor_expr <- t(adj_matrix %*% t(expr_lr))
+  neighbor_expr <- t(adj_matrix %*% t(expr_pairs))
 
   # Clean up original expression matrix to free memory
   rm(expr)
@@ -2169,13 +2168,13 @@ compute_spatial_lr_scores_single_core <- function(seurat_obj, lr_db, adj_matrix,
 
   # 4. Process interactions in chunks to control peak memory usage
   #    This prevents OOM on memory-constrained hosted deployments
-  n_chunks <- ceiling(n_interactions / chunk_size)
-  activity_list <- vector("list", n_chunks)
+  n_chunks <- ceiling(n_pairs / chunk_size)
+  coexpression_list <- vector("list", n_chunks)
 
   for (i in seq_len(n_chunks)) {
     # Calculate chunk boundaries
     start_idx <- (i - 1) * chunk_size + 1
-    end_idx <- min(i * chunk_size, n_interactions)
+    end_idx <- min(i * chunk_size, n_pairs)
     chunk_rows <- start_idx:end_idx
 
     # Update progress
@@ -2185,14 +2184,18 @@ compute_spatial_lr_scores_single_core <- function(seurat_obj, lr_db, adj_matrix,
     }
 
     # Get indices for this chunk
-    lig_idx <- match(lr_db_filtered$Ligand[chunk_rows], rownames(expr_lr))
-    rec_idx <- match(lr_db_filtered$Receptor[chunk_rows], rownames(expr_lr))
+    gene_1_idx <- match(pair_db_filtered$Gene1[chunk_rows], rownames(expr_pairs))
+    gene_2_idx <- match(pair_db_filtered$Gene2[chunk_rows], rownames(expr_pairs))
 
-    # Compute activity for this chunk
-    chunk_activity <- neighbor_expr[lig_idx, , drop = FALSE] * expr_lr[rec_idx, , drop = FALSE]
-    rownames(chunk_activity) <- paste(lr_db_filtered$Ligand[chunk_rows], lr_db_filtered$Receptor[chunk_rows], sep = "-")
+    # Compute co-expression scores for this chunk
+    chunk_coexpression <- neighbor_expr[gene_1_idx, , drop = FALSE] * expr_pairs[gene_2_idx, , drop = FALSE]
+    rownames(chunk_coexpression) <- paste(
+      pair_db_filtered$Gene1[chunk_rows],
+      pair_db_filtered$Gene2[chunk_rows],
+      sep = "-"
+    )
 
-    activity_list[[i]] <- chunk_activity
+    coexpression_list[[i]] <- chunk_coexpression
 
     # Force garbage collection between chunks
     if (i < n_chunks) gc(verbose = FALSE)
@@ -2203,13 +2206,18 @@ compute_spatial_lr_scores_single_core <- function(seurat_obj, lr_db, adj_matrix,
     update_progress(value = 0.95, text = "Finalising results...")
   }
 
-  activity <- do.call(rbind, activity_list)
-  rm(activity_list, neighbor_expr, expr_lr)
+  coexpression <- do.call(rbind, coexpression_list)
+  rm(coexpression_list, neighbor_expr, expr_pairs)
   gc(verbose = FALSE)
 
   # 6. Store results in Seurat object
-  seurat_obj[["LRACTIVITY"]] <- CreateAssayObject(counts = activity)
-  seurat_obj <- SetAssayData(seurat_obj, assay = "LRACTIVITY", layer = "data", new.data = activity)
+  seurat_obj[["MATRISOMEPAIR"]] <- CreateAssayObject(counts = coexpression)
+  seurat_obj <- SetAssayData(
+    seurat_obj,
+    assay = "MATRISOMEPAIR",
+    layer = "data",
+    new.data = coexpression
+  )
 
   return(seurat_obj)
 }
