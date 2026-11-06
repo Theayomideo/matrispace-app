@@ -131,6 +131,8 @@ update_hgnc_symbols <- function(genes, hgnc_long_data) {
     ifelse(genes %in% names(rename_map), unname(rename_map[genes]), genes)
   )
 
+  output[genes == "HSPC159"] <- "LGALSL"
+
   data.frame(
     input_features = genes,
     Output_Features = output,
@@ -858,6 +860,7 @@ compute_matrisome_plot_data <- function(seurat_obj, display_name, internal_name,
   hotspot_values <- df[[log_scaled_feature_name]]
 
   list(
+    display_name        = display_name,
     robust_feature      = robust_feature_name,
     log_scaled_feature  = log_scaled_feature_name,
     annotation_col      = annotation_col,
@@ -1332,7 +1335,8 @@ sctype_annotate_ecm <- function(seurat_obj) {
 }
 
 #' Translate gene symbols to current HGNC and filter to those present in data
-translate_gene_signatures <- function(seurat_obj, signature_list) {
+translate_gene_signatures <- function(seurat_obj, signature_list,
+                                      hgnc_long_data = readRDS(extdata_path("hgnc_long_data.rds"))) {
   seurat_genes <- rownames(seurat_obj)
   translated_signatures <- list()
 
@@ -1352,8 +1356,9 @@ translate_gene_signatures <- function(seurat_obj, signature_list) {
 add_matrisome_feature_scores <- function(seurat_obj, signature_list) {
   translated_sigs <- translate_gene_signatures(seurat_obj, signature_list)
 
-  # UCell requires list of lists for multiple signatures
-  seurat_obj <- AddModuleScore_UCell(
+  score_columns <- paste0(names(signature_list), "_score")
+  seurat_obj@meta.data[intersect(score_columns, names(seurat_obj@meta.data))] <- NULL
+  if (length(translated_sigs)) seurat_obj <- AddModuleScore_UCell(
     seurat_obj,
     features = translated_sigs,
     name = "_score" # Appends this suffix to each signature name
@@ -1401,6 +1406,8 @@ add_matrisome_feature_scores <- function(seurat_obj, signature_list) {
     if (internal_name %in% colnames(seurat_obj@meta.data)) {
       display_name <- display_name_map[[internal_name]]
       seurat_obj@meta.data[[display_name]] <- seurat_obj@meta.data[[internal_name]]
+    } else if (internal_name %in% score_columns) {
+      seurat_obj@meta.data[[display_name_map[[internal_name]]]] <- NULL
     }
   }
 
@@ -1435,11 +1442,7 @@ prepare_uploaded_object <- function(seurat_obj, mat_feat_sigs, ecm_ucell_sigs) {
     DefaultAssay(seurat_obj) <- "SCT"
   }
 
-  # --- Step 2: Check & Add Matrisome Feature Signatures ---
-  if (!"collagens" %in% colnames(seurat_obj@meta.data)) {
-    showNotification("Matrisome feature scores not found. Calculating now...", type = "message", duration = 8)
-    seurat_obj <- add_matrisome_feature_scores(seurat_obj, mat_feat_sigs)
-  }
+  seurat_obj <- add_matrisome_feature_scores(seurat_obj, mat_feat_sigs)
 
   # --- Step 3: Add ECM Domain Annotation ---
   seurat_obj <- sctype_annotate_ecm(seurat_obj)
@@ -2757,4 +2760,827 @@ matrispace_spotclean <- function(obj, genes = NULL, alpha = 0.10, k = 6L,
                              if (scoped) format(length(hit_genes), big.mark = ",") else "all",
                              if (!scoped || length(hit_genes) != 1L) "s" else "",
                              alpha, k, length(common), n))
+}
+
+default_expression_source <- function(object) {
+  assays <- SeuratObject::Assays(object)
+  assay <- if ("SCT" %in% assays) "SCT" else if ("Spatial" %in% assays) "Spatial" else assays[1]
+  layer <- if (length(assay)) intersect(c("counts", "data", "scale.data"), SeuratObject::Layers(object[[assay]]))[1]
+  list(assay = assay, layer = layer)
+}
+
+
+blend_colours <- function(dat, bottom_left, bottom_right, top_left, top_right,
+                          side_length = 100) {
+  grad_gen <- function(start, end) colorRampPalette(c(start, end))(side_length)
+  bl_tl <- grad_gen(bottom_left, bottom_right)
+  br_tr <- grad_gen(top_left, top_right)
+  l <- lapply(seq_along(bl_tl), function(i) grad_gen(bl_tl[i], br_tr[i]))
+  col_grid <- t(matrix(unlist(l), ncol = side_length, nrow = side_length))
+
+  dat_norm <- apply(dat, 2, function(x) round((side_length - 1) * x / max(x)) + 1)
+  spot <- sapply(seq_len(nrow(dat_norm)), function(x) col_grid[dat_norm[x, 1], dat_norm[x, 2]])
+  names(spot) <- rownames(dat)
+
+  legend_grid <- expand.grid(
+    seq(from = min(dat[, 1]), to = max(dat[, 1]), length.out = side_length),
+    seq(from = min(dat[, 2]), to = max(dat[, 2]), length.out = side_length)
+  )
+  colnames(legend_grid) <- colnames(dat)
+  legend_grid$color <- c(col_grid)
+  list(spot = spot, legend = legend_grid)
+}
+
+mean_matrisome_pair_scores <- function(object, assay, group_by) {
+  scores <- SeuratObject::GetAssayData(object, assay = assay, layer = "data")
+  groups <- object[[]][colnames(scores), group_by]
+  cells <- split(seq_along(groups), as.character(groups), drop = TRUE)
+  result <- vapply(cells, function(i) Matrix::rowMeans(scores[, i, drop = FALSE]),
+                   numeric(nrow(scores)))
+  matrix(result, nrow = nrow(scores), ncol = length(cells),
+         dimnames = list(rownames(scores), names(cells)))
+}
+
+export_font <- function(preferred = "Arial") {
+  candidates <- c(preferred, "Liberation Sans", "Arimo", "Helvetica", "DejaVu Sans")
+  hit <- intersect(candidates, systemfonts::system_fonts()$family)
+  if (length(hit)) hit[1] else "sans"
+}
+
+export_style <- function(preset = c("publication", "current")) {
+  preset <- match.arg(preset)
+  list(
+    preset = preset, font = export_font(), size = 8, title_size = 9,
+    panel_mm = 75,
+    image_alpha = if (preset == "publication") 0.55 else 1,
+    # Physical Visium spots (55 um on a 100 um pitch) are too small to read at
+    # figure size; 1.5x keeps neighbours separate.
+    spot_scale = 1.5
+  )
+}
+
+export_label <- function(x) {
+  x <- as.character(x)
+  out <- trimws(gsub("[_ ]+", " ", x))
+  out[x %in% c("not.assigned", "not_assigned")] <- "Unassigned"
+  out[x == "ecm_domain_annotation"] <- "ECM niche"
+  out
+}
+
+export_sentence <- function(x) paste0(toupper(substr(x, 1, 1)), substring(x, 2))
+
+export_unavailable <- function(reason) {
+  stop(structure(class = c("export_unavailable", "error", "condition"),
+                 list(message = reason, call = NULL)))
+}
+
+export_text_theme <- function(style) {
+  theme(
+    text = element_text(family = style$font, size = style$size, colour = "black"),
+    plot.title = element_text(size = style$title_size, hjust = 0, margin = margin(b = 2)),
+    plot.subtitle = element_text(size = style$size, colour = "grey30", hjust = 0, margin = margin(b = 3)),
+    plot.caption = element_text(size = style$size - 1, colour = "grey30", hjust = 0),
+    plot.title.position = "plot", plot.caption.position = "plot",
+    legend.title = element_text(size = style$size),
+    legend.text = element_text(size = style$size),
+    plot.background = element_blank(),
+    plot.margin = margin(3, 3, 3, 3, "mm")
+  )
+}
+
+export_chart_theme <- function(style) {
+  theme_classic(base_size = style$size, base_family = style$font) +
+    export_text_theme(style) +
+    theme(
+      axis.text = element_text(size = style$size, colour = "black"),
+      axis.line = element_line(linewidth = 0.3),
+      axis.ticks = element_line(linewidth = 0.3),
+      panel.grid.major.y = element_line(colour = "grey90", linewidth = 0.25),
+      panel.background = element_blank()
+    )
+}
+
+# Continuous spatial-map scales retain the app palette in both presets.
+# Publication typography, geometry and histology styling are independent.
+# Keep kind/style in the shared interface; neither changes colours or limits.
+export_fill_scale <- function(style, limits, kind = c("sequential", "diverging"),
+                              current = c("spectral", "rdylbu"), title = NULL) {
+  kind <- match.arg(kind)
+  current <- match.arg(current)
+  guide <- guide_colourbar(barheight = grid::unit(22, "mm"), barwidth = grid::unit(3, "mm"))
+  colours <- if (current == "spectral") rev(RColorBrewer::brewer.pal(11, "Spectral")) else {
+    rdylbu <- rev(RColorBrewer::brewer.pal(11, "RdYlBu"))
+    rdylbu[c(1, 6, 11)]
+  }
+  scale_fill_gradientn(colours = colours, limits = limits, name = title, guide = guide)
+}
+
+# Export-only colours for the explicitly selected, precomputed seven-group column.
+# Never infer groups from subtypes, or recolour unrelated annotations/clusters.
+export_grouped_cell_palette <- function() {
+  # Avoids the greens/purples used for ECM niches, so both can share a figure.
+  c(Endothelial = "#3B6FB6", Epithelial = "#9CC3E6", Fibroblasts = "#D9B38C",
+    Myofibroblasts = "#8C5A2B", Lymphoid = "#E8A0BF", Myeloid = "#B03060",
+    "Smooth muscle" = "#333333")
+}
+
+export_annotation_colours <- function(snap, style) {
+  colours <- snap$colours
+  if (style$preset != "publication" || !identical(snap$annotation_col, "dominant_cell_group")) return(colours)
+  palette <- export_grouped_cell_palette()
+  groups <- unique(as.character(snap$annotation))
+  groups <- groups[!is.na(groups) & groups != "not.assigned"]
+  if (!length(groups) || !all(groups %in% names(palette))) return(colours)
+  use <- intersect(names(colours), names(palette))
+  colours[use] <- palette[use]
+  colours
+}
+
+export_discrete_scale <- function(colours, title, labels = export_label) {
+  n <- length(colours)
+  scale_fill_manual(
+    values = colours, labels = labels, name = title, drop = TRUE,
+    guide = guide_legend(ncol = if (n > 18) 2 else 1, override.aes = list(size = 3, alpha = 1, stroke = 0))
+  )
+}
+
+export_range <- function(x) {
+  r <- suppressWarnings(range(x, na.rm = TRUE))
+  if (!all(is.finite(r))) export_unavailable("No finite values to plot.")
+  r
+}
+
+# ---------------------------------------------------------------------------
+# Tissue geometry, histology and physical scale
+# ---------------------------------------------------------------------------
+
+# Visium: Space Ranger's spot_diameter_fullres spans a theoretical 65 um spot;
+# the physical spots are 55 um on a 100 um centre-to-centre lattice.
+visium_scalefactor_um <- 65
+visium_spot_um <- 55
+visium_pitch_um <- 100
+
+resolve_export_image_context <- function(obj, panel_mm = 75) {
+  img <- if (length(obj@images)) obj@images[[1]] else NULL
+  sf <- if (inherits(img, "VisiumV1")) img@scale.factors else NULL
+  # Full-resolution pixels: GetTissueCoordinates() rescales VisiumV1 to low-res.
+  coords <- align_spatial_coordinates(obj, if (inherits(img, "VisiumV1")) img@coordinates)
+  if (!all(c("imagerow", "imagecol") %in% colnames(coords))) stop("No spot coordinates are available.")
+  coords <- data.frame(imagerow = as.numeric(coords$imagerow), imagecol = as.numeric(coords$imagecol),
+                       row.names = rownames(coords))
+  if (anyDuplicated(rownames(coords)) || anyNA(coords)) stop("Spot coordinates are not uniquely identified.")
+
+  nn <- RANN::nn2(coords[, c("imagecol", "imagerow")], k = 2)$nn.dists[, 2]
+  pitch <- stats::median(nn[nn > 0])
+  ctx <- list(coords = coords, pitch = pitch, spot_px = 0.6 * pitch, image = NULL,
+              image_note = "No tissue image in the object.", px_per_um = NA_real_,
+              calibration = "Not calibrated: no spot diameter in full-resolution pixels.")
+
+  spot <- sf$spot
+  if (is.numeric(spot) && length(spot) == 1 && isTRUE(spot > 1)) {
+    px_per_um <- spot / visium_scalefactor_um
+    pitch_um <- pitch / px_per_um
+    if (abs(pitch_um / visium_pitch_um - 1) <= 0.1) {
+      ctx$px_per_um <- px_per_um
+      ctx$spot_px <- visium_spot_um * px_per_um
+      ctx$calibration <- sprintf(paste(
+        "Visium: Space Ranger spot_diameter_fullres (%.1f px) = 65 um, cross-checked by the measured",
+        "spot pitch (%.0f um; Visium 100 um)."), spot, pitch_um)
+    } else {
+      ctx$calibration <- sprintf("Not calibrated: the measured spot pitch (%.0f um) does not match Visium (100 um).", pitch_um)
+    }
+  }
+
+  raster <- if (inherits(img, "VisiumV1")) img@image else NULL
+  scale <- sf$lowres
+  if (length(dim(raster)) == 3 && is.numeric(scale) && length(scale) == 1 && scale > 0) {
+    h <- dim(raster)[1]; w <- dim(raster)[2]
+    inside <- min(coords) >= 0 && max(coords$imagecol) * scale <= w * 1.02 && max(coords$imagerow) * scale <= h * 1.02
+    if (diff(range(raster)) == 0) {
+      ctx$image_note <- "Placeholder image without histology; not drawn."
+    } else if (!inside) {
+      ctx$image_note <- "Image does not register with the spot coordinates at its scale factor; not drawn."
+    } else {
+      ctx$image <- raster
+      ctx$image_size <- c(w, h) / scale
+      ctx$image_note <- sprintf("%d x %d px low-resolution image, exported unchanged", w, h)
+    }
+  }
+
+  pad <- 0.02 * max(diff(range(coords$imagecol)), diff(range(coords$imagerow))) + pitch
+  ctx$xlim <- range(coords$imagecol) + c(-pad, pad)
+  ctx$ylim <- -rev(range(coords$imagerow)) + c(-pad, pad)
+  if (is.finite(ctx$px_per_um)) {
+    ctx$band <- 0.09 * diff(ctx$ylim)
+    ctx$ylim[1] <- ctx$ylim[1] - ctx$band
+  }
+  if (!is.null(ctx$image)) {
+    img_px_across <- diff(ctx$xlim) * scale
+    ctx$image_note <- sprintf("%s (about %.0f dpi at the %.0f mm map width).", ctx$image_note,
+                              img_px_across / (panel_mm / 25.4), panel_mm)
+  }
+  ctx
+}
+
+export_scale_bar <- function(ctx, style) {
+  if (!is.finite(ctx$px_per_um)) return(NULL)
+  width_um <- diff(ctx$xlim) / ctx$px_per_um
+  steps <- c(100, 200, 250, 500, 1000, 2000, 5000)
+  bar_um <- max(steps[steps <= 0.25 * width_um], steps[1])
+  len <- bar_um * ctx$px_per_um
+  x1 <- ctx$xlim[2] - 0.04 * diff(ctx$xlim); x0 <- x1 - len
+  y <- ctx$ylim[1] + 0.3 * ctx$band
+  label <- if (bar_um >= 1000) paste(bar_um / 1000, "mm") else paste(bar_um, "\u00b5m")
+  list(
+    annotate("segment", x = x0, xend = x1, y = y, yend = y, linewidth = 0.6, lineend = "butt"),
+    annotate("text", x = (x0 + x1) / 2, y = y + 0.12 * ctx$band, label = label, vjust = 0,
+             size = style$size / ggplot2::.pt, family = style$font)
+  )
+}
+
+# ---------------------------------------------------------------------------
+# Spatial maps
+# ---------------------------------------------------------------------------
+
+# values: named by barcode; the names define the displayed spot set.
+export_map <- function(ctx, style, values, fill_scale, title = NULL, subtitle = NULL,
+                       italic_title = FALSE, alpha = 1, border = FALSE, size_scale = style$spot_scale,
+                       meta = list()) {
+  cells <- names(values)
+  if (is.null(cells) || anyDuplicated(cells) || !all(cells %in% rownames(ctx$coords))) {
+    stop("Spot identities do not match the tissue coordinates.")
+  }
+  if (!length(cells)) export_unavailable("No spots to display.")
+  df <- data.frame(x = ctx$coords[cells, "imagecol"], y = -ctx$coords[cells, "imagerow"], value = values)
+
+  panel_w <- style$panel_mm
+  panel_h <- panel_w * diff(ctx$ylim) / diff(ctx$xlim)
+  spot_mm <- ctx$spot_px * size_scale * panel_w / diff(ctx$xlim)
+
+  p <- ggplot(df, aes(x, y))
+  if (!is.null(ctx$image)) {
+    a <- style$image_alpha
+    p <- p + annotation_raster(grDevices::as.raster(ctx$image * a + (1 - a)), interpolate = TRUE,
+                               xmin = 0, xmax = ctx$image_size[1], ymin = -ctx$image_size[2], ymax = 0)
+  }
+  p <- p +
+    geom_point(aes(fill = value), shape = 21, size = spot_mm / 0.75, alpha = alpha,
+               colour = if (border) "white" else "transparent", stroke = if (border) 0.15 else 0) +
+    fill_scale + export_scale_bar(ctx, style) +
+    coord_fixed(xlim = ctx$xlim, ylim = ctx$ylim, expand = FALSE) +
+    labs(title = title, subtitle = subtitle) +
+    theme_void(base_size = style$size, base_family = style$font) +
+    export_text_theme(style) +
+    theme(panel.widths = grid::unit(panel_w, "mm"), panel.heights = grid::unit(panel_h, "mm"),
+          legend.key.size = grid::unit(3.5, "mm"), legend.justification = "top")
+  if (italic_title) p <- p + theme(plot.title = element_text(face = "italic"))
+
+  meta <- utils::modifyList(list(n_spots = length(cells), spot_diameter_mm = round(spot_mm, 3),
+                                 image = ctx$image_note, calibration = ctx$calibration), meta)
+  list(plot = p, parts = list(plot = p + theme(legend.position = "none"), legend = export_legend(p)), meta = meta)
+}
+
+export_legend <- function(p) {
+  g <- ggplotGrob(p)
+  keep <- grepl("^guide-box", g$layout$name) & !vapply(g$grobs, inherits, logical(1), "zeroGrob")
+  if (any(keep)) g$grobs[[which(keep)[1]]] else NULL
+}
+
+# ---------------------------------------------------------------------------
+# Writer
+# ---------------------------------------------------------------------------
+
+export_grob <- function(x) if (inherits(x, "ggplot")) ggplotGrob(x) else x
+
+export_size_mm <- function(g) {
+  c(sum(grid::convertWidth(g$widths, "mm", valueOnly = TRUE)),
+    sum(grid::convertHeight(g$heights, "mm", valueOnly = TRUE)))
+}
+
+# Place grobs side by side at their natural sizes.
+export_row <- function(parts, gap_mm = 4) {
+  grobs <- lapply(parts, export_grob)
+  sizes <- vapply(grobs, export_size_mm, numeric(2))
+  widths <- as.vector(rbind(sizes[1, ], gap_mm))[-(2 * length(grobs))]
+  gt <- gtable::gtable(widths = grid::unit(widths, "mm"), heights = grid::unit(max(sizes[2, ]), "mm"))
+  for (i in seq_along(grobs)) {
+    gt <- gtable::gtable_add_grob(gt, grobs[[i]], t = 1, l = 2 * i - 1, clip = "off")
+  }
+  gt
+}
+
+export_draw <- function(g, file, format, size_mm, bg) {
+  w <- size_mm[1] / 25.4; h <- size_mm[2] / 25.4
+  switch(format,
+    svg = svglite::svglite(file, width = w, height = h, bg = bg, fix_text_size = FALSE),
+    pdf = grDevices::cairo_pdf(file, width = w, height = h, bg = bg),
+    png = ragg::agg_png(file, width = w, height = h, units = "in", res = 300, background = bg)
+  )
+  dev <- grDevices::dev.cur()
+  grid::grid.newpage()
+  tryCatch(grid::grid.draw(g), finally = grDevices::dev.off(dev))
+  if (!file.exists(file) || file.size(file) == 0) stop("No ", format, " file was written.")
+  invisible(file)
+}
+
+export_clean_message <- function(msg) {
+  msg <- gsub(normalizePath(tempdir(), winslash = "/", mustWork = FALSE), "<tmp>", msg, fixed = TRUE)
+  gsub(normalizePath(getwd(), winslash = "/", mustWork = FALSE), "<app>", msg, fixed = TRUE)
+}
+
+export_manifest_row <- function(id, part, format, file, status, reason = "", meta = list(), size = c(NA, NA), font = "") {
+  meta_str <- function(x) if (is.null(x)) "" else paste(format(x), collapse = " to ")
+  data.frame(
+    output_id = id, part = part, format = format, file = file, status = status, reason = reason,
+    scope = meta_str(meta$scope), n_spots = meta_str(meta$n_spots), values = meta_str(meta$values),
+    transformation = meta_str(meta$transform), colour_limits = meta_str(meta$limits),
+    width_mm = round(size[1], 1), height_mm = round(size[2], 1), font = font,
+    image = meta_str(meta$image), calibration = meta_str(meta$calibration),
+    stringsAsFactors = FALSE
+  )
+}
+
+# Builds one registry entry and writes every part/format it can. Returns
+# manifest rows; never throws for plot-level problems.
+write_export_plot <- function(entry, dirs, mode, style, formats = c("pdf", "png", "svg")) {
+  stem <- if (length(entry$stem) > 1) entry$stem[[mode]] else entry$stem
+  ragg::agg_capture(width = 10, height = 10, units = "in", res = 72)
+  measure_dev <- grDevices::dev.cur()
+  built <- tryCatch({
+    fig <- entry$build()
+    grobs <- lapply(c(list(complete = fig$plot), Filter(Negate(is.null), fig$parts)), export_grob)
+    list(fig = fig, grobs = grobs, sizes = lapply(grobs, export_size_mm))
+  }, error = function(e) e, finally = grDevices::dev.off(measure_dev))
+
+  if (inherits(built, "error")) {
+    status <- if (inherits(built, "export_unavailable")) "not_available" else "error"
+    return(export_manifest_row(entry$id, "complete", "", "", status, export_clean_message(conditionMessage(built))))
+  }
+
+  rows <- list()
+  for (part in names(built$grobs)) {
+    complete <- part == "complete"
+    for (fmt in if (complete) formats else "svg") {
+      file <- if (complete) file.path(dirs[[fmt]], paste0(stem, ".", fmt)) else
+        file.path(dirs$components, paste0(stem, "__", part, ".svg"))
+      size <- built$sizes[[part]]
+      result <- tryCatch({
+        export_draw(built$grobs[[part]], file, fmt, size, bg = if (complete) "white" else "transparent")
+        NULL
+      }, error = function(e) export_clean_message(conditionMessage(e)))
+      if (!is.null(result) && file.exists(file)) unlink(file)
+      rows[[length(rows) + 1]] <- export_manifest_row(
+        entry$id, part, fmt, basename(file), if (is.null(result)) "success" else "error",
+        if (is.null(result)) "" else result, built$fig$meta, size, style$font)
+    }
+  }
+  do.call(rbind, rows)
+}
+
+# ---------------------------------------------------------------------------
+# Registry
+# ---------------------------------------------------------------------------
+
+matrisome_export_groups <- data.frame(
+  internal = c("glycoprotein", "collagen", "proteoglycan", "regulator", "secreted_factor", "affliated_protein",
+               "perivascular", "hemostasis", "elastic_fibers", "gf_binding",
+               "laminin", "matricellular", "syndecan", "glypican"),
+  stem = c(rep("1%d_matrisome_%s", 6), rep("1%d_matrisome_subcategory_%s", 4), rep("1%d_matrisome_gene_family_%s", 4)),
+  offset = c(rep(0, 6), rep(2, 4), rep(4, 4)),
+  view = c(rep("main", 6), rep("subcategories", 4), rep("families", 4)),
+  stringsAsFactors = FALSE
+)
+
+ecm_niche_signatures <- c(Interstitial = "Interstitial ECM", Basement = "Basement membrane")
+
+feature_is_gene <- function(sel) sel %in% c("matrisome gene", "any gene")
+
+feature_unit <- function(f, role) {
+  sel <- if (role == "primary") f$sel1 else f$sel2
+  gene <- if (role == "primary") f$gene1 else f$gene2
+  if (feature_is_gene(sel) && gene != "Custom matrisome list") {
+    sprintf("Expression (%s %s)", f$expression$assay, f$expression$layer)
+  } else "UCell score"
+}
+
+build_export_plot_registry <- function(snap, style) {
+  ctx <- resolve_export_image_context(snap$obj, style$panel_mm)
+  f <- snap$feature
+  m <- snap$matrisome
+  meta_cols <- colnames(snap$obj@meta.data)
+  current <- style$preset == "current"
+  annotation_colours <- export_annotation_colours(snap, style)
+  views <- snap$views
+  view_scale <- function(pt) if (current && is.numeric(pt)) pt / 1.6 else style$spot_scale
+  d3_scale <- function(v) if (current && is.numeric(v$size)) v$size / 3.5 else style$spot_scale
+
+  entry <- function(id, stem, build) list(id = id, stem = stem, build = build)
+  need_feature <- function() if (is.null(f)) export_unavailable("Feature analysis has not been run.")
+  need_matrisome <- function() if (is.null(m)) export_unavailable("Matrisome profile has not been run.")
+  need_secondary <- function() {
+    need_feature()
+    if (identical(f$sel2, "none") || !nzchar(f$gene2)) export_unavailable("No secondary feature was analysed.")
+  }
+  feature_cells <- function() {
+    need_feature()
+    if (isTRUE(f$stale)) {
+      export_unavailable("The annotation changed after the feature analysis; rerun Feature Analysis to export feature views.")
+    }
+    if (!length(f$selected)) export_unavailable("No annotations are selected in the feature view.")
+    keep <- f$data[[f$annotation_col]] %in% f$selected
+    if (!any(keep)) export_unavailable("No spots match the selected annotations.")
+    rownames(f$data)[keep]
+  }
+  selection_scope <- function(cells) {
+    sprintf("Feature view: %d of %d annotations selected (%s)", length(f$selected),
+            length(unique(f$data[[f$annotation_col]])), paste(export_label(f$selected), collapse = "; "))
+  }
+  annotation_map <- function(values, colours, title, scope, view = views$main) {
+    export_map(ctx, style, values, export_discrete_scale(colours, export_sentence(export_label(title))),
+               alpha = if (current && is.numeric(view$opacity)) view$opacity else 1,
+               border = current && isTRUE(view$borders),
+               size_scale = d3_scale(view), meta = list(scope = scope))
+  }
+
+  feature_map <- function(role) {
+    cells <- feature_cells()
+    gene <- if (role == "primary") f$gene1 else f$gene2
+    sel <- if (role == "primary") f$sel1 else f$sel2
+    contrast <- f$contrast[[role]]
+    values <- if (!is.null(contrast)) unname(contrast[cells]) else f$data[cells, if (role == "primary") "feature1" else "feature2"]
+    limits <- if (!is.null(contrast)) c(0, 1) else c(0, max(export_range(values)[2], 0))
+    legend <- if (!is.null(contrast)) "UCell relative\ncontrast" else sub(" \\(", "\n(", feature_unit(f, role))
+    export_map(ctx, style, setNames(values, cells),
+               export_fill_scale(style, limits, "sequential", "rdylbu", legend),
+               title = gene, italic_title = feature_is_gene(sel) && gene != "Custom matrisome list",
+               meta = list(scope = selection_scope(cells), values = feature_unit(f, role), limits = limits,
+                           transform = if (!is.null(contrast)) "Within-tissue percentile (relative contrast)" else "None"))
+  }
+
+  distribution <- function(role) {
+    cells <- feature_cells()
+    col <- if (role == "primary") "feature1" else "feature2"
+    gene <- if (role == "primary") f$gene1 else f$gene2
+    sel <- if (role == "primary") f$sel1 else f$sel2
+    df <- data.frame(group = factor(f$data[cells, f$annotation_col], levels = f$selected), value = f$data[cells, col])
+    df <- df[!is.na(df$group), ]
+    groups <- levels(droplevels(df$group))
+    p_value <- if (length(groups) >= 2) {
+      tryCatch(summary(aov(value ~ group, data = df))[[1]][["Pr(>F)"]][1], error = function(e) NA)
+    } else NA
+    caption <- if (is.na(p_value)) NULL else
+      sprintf("One-way ANOVA across spots\n(selected groups): p = %s", format.pval(p_value, digits = 3))
+    geom <- if (isTRUE(f$violin)) geom_violin(scale = "width", trim = TRUE, linewidth = 0.25, colour = "grey20") else
+      geom_boxplot(linewidth = 0.25, outlier.size = 0.3, colour = "grey20")
+    p <- ggplot(df, aes(group, value, fill = group)) + geom +
+      scale_fill_manual(values = annotation_colours, guide = "none") +
+      scale_x_discrete(labels = export_label) +
+      labs(title = gene, x = NULL, y = feature_unit(f, role), caption = caption) +
+      export_chart_theme(style) +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1),
+            panel.widths = grid::unit(max(30, 8 * length(groups)), "mm"), panel.heights = grid::unit(45, "mm"))
+    if (feature_is_gene(sel) && gene != "Custom matrisome list") p <- p + theme(plot.title = element_text(face = "italic"))
+    limits <- NULL
+    if (!isTRUE(f$independent_y)) {
+      limits <- c(0, max(c(f$data$feature1, f$data$feature2), na.rm = TRUE))
+      p <- p + coord_cartesian(ylim = limits)
+    }
+    list(plot = p, meta = list(scope = selection_scope(cells), n_spots = length(cells), values = feature_unit(f, role),
+                               limits = limits, transform = if (isTRUE(f$violin)) "Violin (density trimmed to range)" else "Box (Tukey whiskers)"))
+  }
+
+  matrisome_entries <- lapply(seq_len(nrow(matrisome_export_groups)), function(i) {
+    g <- matrisome_export_groups[i, ]
+    build <- function(kind) function() {
+      need_matrisome()
+      res <- m$results[[g$internal]]
+      if (is.null(res)) export_unavailable("Insufficient data for visualisation.")
+      col <- if (kind == "distribution") res$robust_feature else res$log_scaled_feature
+      values <- snap$obj@meta.data[[col]]
+      names(values) <- rownames(snap$obj@meta.data)
+      values <- values[!is.na(values)]
+      limits <- export_range(values)
+      legend <- if (kind == "distribution") "Expression\nz-score" else "Expression\nintensity (log)"
+      export_map(ctx, style, values,
+                 export_fill_scale(style, limits, if (kind == "distribution") "diverging" else "sequential", "spectral", legend),
+                 title = res$display_name, subtitle = if (kind == "distribution") "Spatial distribution" else "Hotspots",
+                 size_scale = view_scale(views$pt[[g$view]]),
+                 meta = list(scope = "All spots with a score", values = col, limits = limits,
+                             transform = if (kind == "distribution") "Robust z-score" else "Log-scaled score"))
+    }
+    list(
+      entry(paste0("matrisome_", g$internal, "_distribution"), sprintf(g$stem, g$offset, paste0(g$internal, "_distribution")), build("distribution")),
+      entry(paste0("matrisome_", g$internal, "_hotspot"), sprintf(g$stem, g$offset + 1, paste0(g$internal, "_hotspot")), build("hotspot"))
+    )
+  })
+
+  niche_map <- function(sig, kind) function() {
+    need_matrisome()
+    col <- paste0(sig, if (kind == "score") "_UCell" else "_Hotspot_Score")
+    if (!col %in% meta_cols) export_unavailable(sprintf("%s is not available for this sample.", col))
+    values <- setNames(snap$obj@meta.data[[col]], rownames(snap$obj@meta.data))
+    values <- values[!is.na(values)]
+    limits <- export_range(values)
+    legend <- if (kind == "score") "Niche score\n(UCell)" else "Niche score\nintensity (log)"
+    export_map(ctx, style, values, export_fill_scale(style, limits, "sequential", "spectral", legend),
+               title = ecm_niche_signatures[[sig]], subtitle = if (kind == "score") "Niche score" else "Hotspots",
+               size_scale = view_scale(views$pt$ecm),
+               meta = list(scope = "All spots", values = col, limits = limits,
+                           transform = if (kind == "score") "None" else "Min-max scaled log1p(UCell)"))
+  }
+
+  lr_niches <- if (!is.null(snap$pairs)) {
+    n <- unique(snap$pairs$stats$cluster)
+    n[!grepl("not.assigned|not_assigned", n, ignore.case = TRUE)]
+  } else character(0)
+
+  pair_enrichment <- function(niche) function() {
+    stats <- snap$pairs$stats[snap$pairs$stats$cluster == niche, ]
+    if (!nrow(stats)) export_unavailable("No pair statistics for this niche.")
+    hits <- stats %>% filter(avg_log2FC > 0.5 & perc_difference > 0.05) %>% slice_max(order_by = avg_log2FC, n = 20)
+    y_limit <- min(max(abs(quantile(stats$avg_log2FC, c(0.01, 0.99), na.rm = TRUE))) * 1.1, 10)
+    p <- ggplot(stats, aes(perc_difference, avg_log2FC)) +
+      geom_point(colour = "grey70", alpha = 0.6, size = 0.5, stroke = 0) +
+      geom_point(data = hits, colour = "#B2182B", size = 1.1, stroke = 0) +
+      ggrepel::geom_text_repel(data = hits, aes(label = feature), size = style$size / ggplot2::.pt, family = style$font,
+                               max.overlaps = Inf, box.padding = 0.3, point.padding = 0.1, force = 3, force_pull = 0.5,
+                               max.time = 3, max.iter = 1e5,
+                               min.segment.length = 0, segment.size = 0.2, segment.colour = "grey50", seed = 1) +
+      geom_hline(yintercept = 0.5, linetype = "dashed", linewidth = 0.3) +
+      geom_vline(xintercept = 0.05, linetype = "dashed", linewidth = 0.3) +
+      coord_cartesian(ylim = c(-y_limit, y_limit)) +
+      labs(title = paste("Matrisome pair enrichment:", export_label(niche), "niche"),
+           x = "Difference in fraction of co-expressing spots\n(in niche minus outside)",
+           y = "Average log2 fold change") +
+      export_chart_theme(style) +
+      theme(panel.widths = grid::unit(110, "mm"), panel.heights = grid::unit(85, "mm"))
+    list(plot = p, meta = list(scope = paste(export_label(niche), "niche vs all other spots"),
+                               values = "avg_log2FC vs perc_difference (fraction)",
+                               transform = "Top 20 by log2FC with log2FC > 0.5 and difference > 0.05 labelled"))
+  }
+
+  feature_scope_all <- function() sprintf("All %d analysed spots", nrow(f$data))
+
+  entries <- c(
+    list(
+      entry("tissue_image", c(all = "00_tissue_image_with_scale_bar", plots = "00_tissue_image"), function() {
+        if (is.null(ctx$image)) export_unavailable(ctx$image_note)
+        p <- ggplot() +
+          annotation_raster(grDevices::as.raster(ctx$image), interpolate = TRUE,
+                            xmin = 0, xmax = ctx$image_size[1], ymin = -ctx$image_size[2], ymax = 0) +
+          export_scale_bar(ctx, style) +
+          coord_fixed(xlim = ctx$xlim, ylim = ctx$ylim, expand = FALSE) +
+          theme_void(base_family = style$font) + export_text_theme(style) +
+          theme(panel.widths = grid::unit(style$panel_mm, "mm"),
+                panel.heights = grid::unit(style$panel_mm * diff(ctx$ylim) / diff(ctx$xlim), "mm"))
+        list(plot = p, meta = list(scope = "Complete tissue", image = ctx$image_note, calibration = ctx$calibration))
+      }),
+      entry("annotation_map", c(all = "01_annotation_plot_with_scale_bar", plots = "01_annotation_plot"), function() {
+        annotation_map(snap$annotation, annotation_colours, snap$annotation_col, "All spots")
+      }),
+      entry("primary_feature", "02_primary_feature", function() feature_map("primary")),
+      entry("secondary_feature", "03_secondary_feature", function() { need_secondary(); feature_map("secondary") }),
+      entry("co_expression", "04_co_expression", function() {
+        need_secondary()
+        cells <- intersect(rownames(f$data), rownames(ctx$coords))
+        corners <- coex_blend_colors(f$coex$palette)
+        blend <- blend_colours(f$data[cells, c("feature1", "feature2")], corners$bottom_left, corners$bottom_right,
+                               corners$top_left, corners$top_right)
+        fig <- export_map(ctx, style, blend$spot, scale_fill_identity(), alpha = f$coex$alpha,
+                          size_scale = view_scale(f$coex$pt_size),
+                          title = paste(f$gene1, "and", f$gene2, "co-expression"),
+                          meta = list(scope = feature_scope_all(), values = "Bivariate blend of feature1 and feature2",
+                                      transform = "Each feature scaled to its maximum"))
+        legend <- ggplot(blend$legend, aes(.data$feature1, .data$feature2, fill = .data$color)) +
+          geom_raster() + scale_fill_identity() + coord_cartesian(expand = FALSE) +
+          labs(x = f$gene1, y = f$gene2) + export_chart_theme(style) +
+          theme(panel.widths = grid::unit(22, "mm"), panel.heights = grid::unit(22, "mm"), axis.line = element_blank(),
+                panel.grid.major.y = element_blank(), axis.text.x = element_text(angle = 45, hjust = 1))
+        if (feature_is_gene(f$sel1)) legend <- legend + theme(axis.title.x = element_text(face = "italic"))
+        if (feature_is_gene(f$sel2)) legend <- legend + theme(axis.title.y = element_text(face = "italic"))
+        fig$parts$legend <- legend
+        fig$plot <- export_row(list(fig$parts$plot, legend))
+        fig
+      }),
+      entry("lisa", "05_lisa_clustering", function() {
+        need_secondary()
+        if (all(f$data$LISA == "not.applicable")) export_unavailable("LISA classes were not computed for this analysis.")
+        cells <- feature_cells()
+        k <- lisa_classes(f$data[cells, ], f$annotation_col, f$gene1, f$gene2)
+        colours <- lisa_colours(levels(k$LISA_dynamic))
+        spatial <- export_map(ctx, style, setNames(k$LISA_dynamic, cells),
+                              export_discrete_scale(colours, "Spatial association\npattern", labels = function(x) sub(" \\| ", "\n", x)),
+                              title = "LISA clustering",
+                              meta = list(scope = paste(selection_scope(cells),
+                                                        "- classes computed over all analysed spots")))
+        n_ids <- max(colSums(table(k$id, k$LISA_dynamic) > 0))
+        summary <- lisa_summary_plot(k, colours) +
+          scale_y_discrete(labels = function(x) export_label(gsub("___.+$", "", x))) +
+          labs(x = "Proportion within class") +
+          export_text_theme(style) +
+          theme(axis.text = element_text(size = style$size), axis.text.y = element_text(size = style$size),
+                panel.widths = grid::unit(40, "mm"),
+                panel.heights = grid::unit(rep(max(8, 3.6 * n_ids), 4), "mm"))
+        spatial$parts$summary <- summary
+        spatial$plot <- export_row(list(spatial$plot, summary))
+        spatial
+      }),
+      entry("cluster_map", "06_cluster_map", function() {
+        col <- if ("seurat_clusters" %in% meta_cols) "seurat_clusters" else grep("cluster", meta_cols, ignore.case = TRUE, value = TRUE)[1]
+        if (is.na(col)) export_unavailable("No cluster column found.")
+        values <- setNames(as.character(snap$obj@meta.data[[col]]), rownames(snap$obj@meta.data))
+        lv <- levels(factor(snap$obj@meta.data[[col]]))
+        values <- factor(values, levels = lv)
+        names(values) <- rownames(snap$obj@meta.data)
+        export_map(ctx, style, values, export_discrete_scale(setNames(scales::hue_pal()(length(lv)), lv), export_label(col)),
+                   size_scale = view_scale(1.6), meta = list(scope = "All spots", values = col))
+      }),
+      entry("selected_annotation_map", "07_selected_annotation_plot", function() {
+        cells <- feature_cells()
+        annotation_map(setNames(f$data[cells, f$annotation_col], cells), annotation_colours, f$annotation_col, selection_scope(cells))
+      }),
+      entry("primary_distribution", "08_primary_feature_distribution", function() distribution("primary")),
+      entry("secondary_distribution", "09_secondary_feature_distribution", function() { need_secondary(); distribution("secondary") })
+    ),
+    unlist(matrisome_entries, recursive = FALSE),
+    list(
+      entry("ecm_domain_annotation", "20_ecm_domain_annotation", function() {
+        need_matrisome()
+        if (!"ecm_domain_annotation" %in% meta_cols) export_unavailable("ECM niche annotations are unavailable for this sample.")
+        values <- setNames(as.character(snap$obj@meta.data$ecm_domain_annotation), rownames(snap$obj@meta.data))
+        values[is.na(values)] <- "not.assigned"
+        annotation_map(values, create_ecm_color_map(unique(values)), "ecm_domain_annotation", "All spots", views$ecm)
+      })
+    ),
+    lapply(names(ecm_niche_signatures), function(sig) entry(paste0("ecm_niche_score_", tolower(sig)),
+                                                            paste0("21_ecm_niche_score_", tolower(sig)), niche_map(sig, "score"))),
+    list(entry("niche_means", "22_niche_distribution", function() {
+      need_matrisome()
+      d <- m$niche_means
+      if (is.null(d) || !nrow(d)) export_unavailable("Niche scores or annotations are unavailable.")
+      groups <- sort(unique(as.character(d$annotation_group)))
+      d$annotation_group <- factor(d$annotation_group, levels = rev(groups))
+      p <- ggplot(d, aes(mean_score, annotation_group, fill = signature_name)) +
+        geom_col(position = position_dodge(width = 0.8), width = 0.75) +
+        scale_fill_manual(values = c("Basement membrane" = "#6a3d9aff", "Interstitial ECM" = "#2b9e2bff"), name = NULL) +
+        scale_y_discrete(labels = export_label) +
+        scale_x_continuous(expand = expansion(mult = c(0, 0.05))) +
+        labs(x = "Mean niche score (UCell)", y = NULL, title = paste("Mean ECM niche score by", tolower(export_label(m$annotation_col)))) +
+        export_chart_theme(style) +
+        guides(fill = guide_legend(ncol = 1)) +
+        theme(legend.position = "top", legend.justification = "left", legend.key.size = grid::unit(3, "mm"),
+              panel.grid.major.y = element_blank(),
+              panel.grid.major.x = element_line(colour = "grey90", linewidth = 0.25),
+              panel.widths = grid::unit(60, "mm"), panel.heights = grid::unit(max(25, 4.2 * length(groups)), "mm"))
+      list(plot = p, meta = list(scope = "Mean over all spots in each annotation group", values = "Mean UCell score"))
+    })),
+    lapply(names(ecm_niche_signatures), function(sig) entry(paste0("ecm_niche_hotspot_", tolower(sig)),
+                                                            paste0("23_ecm_niche_hotspot_", tolower(sig)), niche_map(sig, "hotspot"))),
+    list(entry("pair_heatmap", "30_matrisome_coexpression_heatmap", function() {
+      if (is.null(snap$pairs)) export_unavailable("Matrisome pair analysis has not been run.")
+      top <- snap$pairs$stats %>%
+        filter(!grepl("not.assigned|not_assigned", cluster, ignore.case = TRUE)) %>%
+        filter(perc_difference > 0.05 & avg_log2FC > 0.5) %>%
+        group_by(cluster) %>% slice_max(order_by = avg_log2FC, n = 10)
+      if (!nrow(top)) export_unavailable("No significantly enriched matrisome pairs with the current filters.")
+      mat <- snap$pairs$means[unique(top$feature), , drop = FALSE]
+      mat <- mat[, !grepl("not.assigned|not_assigned", colnames(mat), ignore.case = TRUE), drop = FALSE]
+      z <- t(scale(t(as.matrix(mat))))
+      lo <- min(z, na.rm = TRUE); hi <- max(z, na.rm = TRUE)
+      args <- list(mat, labels_col = export_label(colnames(mat)), scale = "row", cluster_rows = TRUE, cluster_cols = TRUE,
+                   angle_col = 45, cellwidth = 30, cellheight = 10, silent = TRUE)
+      args <- if (current) c(args, list(fontsize_row = 8, fontsize_col = 10, border_color = "grey60")) else
+        c(args, list(fontsize = style$size, fontsize_row = style$size, fontsize_col = style$size, border_color = NA,
+                     fontfamily = style$font, breaks = c(seq(lo, 0, length.out = 51), seq(0, hi, length.out = 51)[-1]),
+                     color = grDevices::colorRampPalette(rev(RColorBrewer::brewer.pal(11, "RdBu")))(100)))
+      gt <- do.call(pheatmap::pheatmap, args)$gtable
+      note <- grid::textGrob("Colour: row z-score of mean co-expression per niche", x = 0, hjust = 0,
+                             gp = grid::gpar(fontsize = style$size, fontfamily = style$font))
+      gt <- gtable::gtable_add_rows(gt, grid::unit(6, "mm"))
+      gt <- gtable::gtable_add_grob(gt, note, t = nrow(gt), l = 1, r = ncol(gt), clip = "off")
+      gt <- gtable::gtable_add_padding(gt, grid::unit(3, "mm"))
+      list(plot = gt, meta = list(scope = "Top 10 pairs per niche (log2FC > 0.5, difference > 0.05)",
+                                  values = "Mean co-expression per niche", transform = "Row z-score; hierarchical clustering",
+                                  limits = round(c(lo, hi), 3)))
+    })),
+    if (length(lr_niches)) {
+      lapply(lr_niches, function(n) entry(paste0("pair_enrichment_", n), paste0("31_matrisome_coexpression_volcano_", gsub(" ", "_", n)),
+                                          pair_enrichment(n)))
+    } else {
+      list(entry("pair_enrichment", "31_matrisome_coexpression_volcano", function() export_unavailable("Matrisome pair analysis has not been run.")))
+    }
+  )
+  list(entries = entries, ctx = ctx)
+}
+
+# ---------------------------------------------------------------------------
+# Manifest, settings and README
+# ---------------------------------------------------------------------------
+
+write_export_manifest <- function(rows, snap, style, ctx, dir, data_lines = character(0), plot_dirs) {
+  utils::write.csv(rows, file.path(dir, "export_manifest.csv"), row.names = FALSE)
+
+  f <- snap$feature
+  pkgs <- c("Seurat", "ggplot2", "svglite", "ragg", "pheatmap", "systemfonts")
+  settings <- list(
+    sample = snap$sample, exported_at = format(snap$time, "%Y-%m-%d %H:%M:%S %Z"),
+    appearance = style$preset, font = style$font, image = ctx$image_note, calibration = ctx$calibration,
+    annotation_column = snap$annotation_col,
+    annotation_colours = as.list(export_annotation_colours(snap, style)),
+    feature_analysis = if (!is.null(f)) list(
+      primary = f$gene1, primary_type = f$sel1, secondary = f$gene2, secondary_type = f$sel2,
+      expression_source = f$expression, annotation_column = f$annotation_col, selected_annotations = f$selected,
+      relative_contrast = names(Filter(Negate(is.null), f$contrast)),
+      violin = isTRUE(f$violin), independent_y = isTRUE(f$independent_y), co_expression = f$coex),
+    matrisome_profile = !is.null(snap$matrisome), matrisome_pairs = !is.null(snap$pairs),
+    view_controls = snap$views,
+    packages = as.list(vapply(setNames(pkgs, pkgs), function(p) as.character(utils::packageVersion(p)), ""))
+  )
+  jsonlite::write_json(settings, file.path(dir, "export_settings.json"), auto_unbox = TRUE, pretty = TRUE, null = "null")
+
+  # A figure counts as failed if any of its formats or components failed.
+  figure_status <- tapply(rows$status, rows$output_id, function(s) {
+    if (any(s == "error")) "error" else if (all(s == "not_available")) "not_available" else "success"
+  })
+  status_line <- sprintf("%d figures exported, %d not available, %d failed (details in export_manifest.csv).",
+                         sum(figure_status == "success"), sum(figure_status == "not_available"),
+                         sum(figure_status == "error"))
+  readme <- c(
+    "MatriSpace Analysis Export",
+    "==========================",
+    paste("Sample Name:", snap$sample),
+    paste("Export Date:", format(snap$time, "%Y-%m-%d")),
+    paste("Figure appearance:", if (style$preset == "publication") "Publication" else "Current view"),
+    "",
+    status_line,
+    "",
+    "Figures:",
+    sprintf("- %s: vector PDFs for publication.", plot_dirs$pdf),
+    sprintf("- %s: 300 dpi PNGs for viewing.", plot_dirs$png),
+    sprintf("- %s: SVGs for editing in PowerPoint or a vector editor.", plot_dirs$svg),
+    sprintf("- %s: the same maps split into plot and legend files (LISA adds a summary; co-expression adds its bivariate legend).",
+            plot_dirs$components),
+    "  Spots, axes and text are vector; histology is an embedded raster image. Resizing a figure also resizes its text.",
+    sprintf("- Typeface: %s; 9 pt titles and 8 pt labels at the exported size.", style$font),
+    sprintf("- Histology: %s", ctx$image_note),
+    sprintf("- Scale bar: %s", if (is.finite(ctx$px_per_um)) ctx$calibration else paste(ctx$calibration, "No scale bar drawn.")),
+    "- Feature maps, distributions and LISA show the annotations selected in the feature view; LISA classes and",
+    "  feature statistics were computed over all analysed spots. Other maps show all spots.",
+    if (style$preset == "publication") {
+      paste("- Publication continuous spatial maps retain the on-screen palettes and colour limits, with publication typography,",
+            "Visium spots drawn at 1.5x their 55 um diameter and lighter histology. Values are unchanged.",
+            "The dominant_cell_group annotation uses the fixed seven-group publication palette in maps and distributions;",
+            "other annotation colours are unchanged. Group assignments are read from metadata, not recalculated.",
+            "Other plots retain their publication styling.")
+    } else {
+      "- Current view follows the on-screen palettes and spot controls; on-screen D3 and Plotly sizes are approximated."
+    },
+    "- export_manifest.csv lists every expected output with its status, scope, values and colour limits.",
+    "- export_settings.json records the analysis inputs, annotation colours, view controls and package versions.",
+    if (length(data_lines)) c("", data_lines)
+  )
+  writeLines(readme, file.path(dir, "README.txt"), useBytes = FALSE)
+  status_line
+}
+
+lisa_classes <- function(k, ann_col, f1_name, f2_name) {
+  k$id <- k[[ann_col]]
+  dynamic_levels <- c(
+    paste0("High ", f1_name, " | High ", f2_name, " Neighbors"),
+    paste0("High ", f1_name, " | Low ",  f2_name, " Neighbors"),
+    paste0("Low ",  f1_name, " | High ", f2_name, " Neighbors"),
+    paste0("Low ",  f1_name, " | Low ",  f2_name, " Neighbors")
+  )
+  codes <- setNames(dynamic_levels, c("High.High", "High.Low", "Low.High", "Low.Low"))
+  k$LISA_dynamic <- factor(unname(codes[k$LISA]), levels = dynamic_levels)
+  k
+}
+
+lisa_colours <- function(levels) setNames(c("#d62728", "#ff7f0e", "#9467bd", "#1f77b4"), levels)
+
+#' Proportion of each annotation within each LISA class, bars sorted per class.
+lisa_summary_plot <- function(k, colours) {
+  summary_data <- k %>%
+    dplyr::count(LISA_dynamic, id, .drop = FALSE) %>%
+    dplyr::group_by(LISA_dynamic) %>%
+    dplyr::mutate(proportion = n / sum(n)) %>%
+    dplyr::ungroup() %>%
+    dplyr::mutate(id = reorder_within(id, proportion, LISA_dynamic))
+
+  ggplot(summary_data, aes(x = proportion, y = id, fill = LISA_dynamic)) +
+    geom_col() +
+    scale_fill_manual(values = colours, drop = FALSE) +
+    scale_y_reordered() +
+    scale_x_continuous(labels = scales::percent_format(), expand = c(0, 0.01)) +
+    facet_wrap(~LISA_dynamic, ncol = 1, scales = "free_y") +
+    theme_light(base_size = 11) +
+    theme(
+      legend.position = "none",
+      strip.text = element_blank(),
+      panel.grid.major.y = element_blank(),
+      panel.grid.minor.x = element_blank(),
+      axis.text.y = element_text(size = 9),
+      axis.title.y = element_blank()
+    ) +
+    labs(x = "Proportion", y = "Annotation")
 }

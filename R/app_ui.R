@@ -307,6 +307,7 @@ page_fillable(
           class = "btn btn-success dropdown-toggle initially-disabled",
           type = "button",
           `data-bs-toggle` = "dropdown",
+          `data-bs-auto-close` = "outside",
           `aria-expanded` = "false",
           disabled = "disabled",
           icon("download"), " Export Results"
@@ -314,12 +315,25 @@ page_fillable(
         tags$ul(
           class = "dropdown-menu w-100",
           `aria-labelledby` = "export_dropdown_btn",
-          tags$li(downloadLink("export_all", class = "dropdown-item", icon("file-zipper"), " Export All (ZIP)")),
+          tags$li(div(
+            class = "px-3 pt-1",
+            radioButtons("export_preset", "Figure appearance", inline = TRUE,
+                         choices = c("Publication" = "publication", "Current view" = "current")),
+            tags$small(class = "text-muted d-block mb-2",
+                       "Choose publication styling or match the current view. Exports include PDF, PNG and editable SVG.")
+          )),
+          tags$li(tags$hr(class = "dropdown-divider")),
+          tags$li(actionLink("prepare_export_all", " Export All (ZIP)", icon = icon("file-zipper"), class = "dropdown-item")),
           tags$li(tags$hr(class = "dropdown-divider")),
           tags$li(downloadLink("export_metadata", class = "dropdown-item", icon("table"), " Spot Metadata (CSV)")),
           tags$li(downloadLink("export_scores", class = "dropdown-item", icon("chart-bar"), " Matrisome Scores (CSV)")),
           tags$li(tags$hr(class = "dropdown-divider")),
-          tags$li(downloadLink("export_plots", class = "dropdown-item", icon("images"), " Plots Only (ZIP)"))
+          tags$li(actionLink("prepare_export_plots", " Plots Only (ZIP)", icon = icon("images"), class = "dropdown-item"))
+        ),
+        div(
+          style = "display:none",
+          downloadLink("export_all"),
+          downloadLink("export_plots")
         )
       )
     ),

@@ -1,0 +1,18 @@
+"field","value"
+"timestamp","2026-08-24 12:09:45 EEST"
+"input_path","C:/Users/oshin/Work/matrispace_manuscript_rework/ucell_benchmark/data/Breast_cancer_Ductal_Carcinoma_In_Situ_Invasive.RDS"
+"signature_path","C:/Users/oshin/Work/matrispace_manuscript_rework/ucell_benchmark/data/ecm_ucell_signatures.rds"
+"hgnc_path","C:/Users/oshin/Work/matrispace_manuscript_rework/ucell_benchmark/data/hgnc_long_data.rds"
+"spots","4992"
+"genes","18045"
+"score_assay","SCT"
+"score_layer","data"
+"raw_assay","Spatial"
+"ucell_version","2.4.0"
+"seurat_version","5.0.2"
+"random_seed","264998"
+"downsampling_run","FALSE"
+"downsampling_repetitions",NA
+"downsampling_retention_rates",NA
+"strength_tests_run","TRUE"
+"strength_test_repetitions","20"

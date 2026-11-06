@@ -24,6 +24,11 @@ app_server <- function(input, output, session) {
   # ---------------------------------------------------------------------------
   # INITIAL SETUP & OBSERVERS
   # ---------------------------------------------------------------------------
+  notify_problem <- function(text, error, context, duration = 10) {
+    message("[MatriSpace] ", context, ": ", conditionMessage(error))
+    showNotification(text, type = "error", duration = duration)
+  }
+
   # Helper function: Convert to sentence case (capitalize first letter only)
   to_sentence_case <- function(text) {
     if (is.na(text) || text == "") return(text)
@@ -371,7 +376,7 @@ app_server <- function(input, output, session) {
           has_sct_model <- has_sct && length(obj[["SCT"]]@SCTModel.list) > 0
           has_sct && (has_scale_data || has_sct_model)
       }, error = function(e) FALSE)
-      features_ok <- tryCatch("collagens" %in% colnames(obj@meta.data), error = function(e) FALSE)
+      features_ok <- tryCatch(any(c("collagens", "collagens_score", "Collagens") %in% colnames(obj@meta.data)), error = function(e) FALSE)
       ucell_ok <- tryCatch("Interstitial_UCell" %in% colnames(obj@meta.data), error = function(e) FALSE)
 
       if (!all(sct_ok, features_ok, domain_ok, ucell_ok)) {
@@ -390,6 +395,7 @@ app_server <- function(input, output, session) {
           rv$raw_uploaded_object <- obj
       } else {
           # Object is ready, populate the UNIVERSAL source of truth
+          obj <- add_matrisome_feature_scores(obj, matrisome_feature_signatures)
           obj <- sctype_annotate_ecm(obj)
           if (!"ecm_domain_annotation" %in% colnames(obj@meta.data)) {
             showNotification(
@@ -735,7 +741,10 @@ app_server <- function(input, output, session) {
       data  = results_df,
       gene1 = gene1_val,
       gene2 = gene2_val,
+      sel1 = sel1_val,
       sel2  = sel2_val,
+      annotation_col = original_annot_col_name,
+      expression = default_expression_source(obj_run),
       custom_gene_sets = custom_sets,
       custom_score_assay = if (is.null(run_result$scoring)) NULL else run_result$scoring$assay,
       custom_score_layer = if (is.null(run_result$scoring)) NULL else run_result$scoring$layer,
@@ -788,7 +797,7 @@ app_server <- function(input, output, session) {
       # the object rather than the whole transcriptome.
       seurat_obj_with_scores <- leak_apply(
         d0(),
-        available_matrisome_genes(d0(), mobj),
+        available_matrisome_genes(d0(), unique(matrisome$gene)),
         context = "matrisome profile"
       )
       raw_counts <- safe_get_assay_data(seurat_obj_with_scores, slot = "counts")
@@ -857,7 +866,7 @@ app_server <- function(input, output, session) {
         # Process main divisions
         for (display_name in names(main_divisions_map)) {
           internal_name <- main_divisions_map[[display_name]]
-          gene_list <- matrisome$gene[matrisome$notes == display_name]
+          gene_list <- intersect(matrisome$gene[matrisome$notes == display_name], mobj)
           process_one(display_name, internal_name, gene_list)
         }
 
@@ -2723,11 +2732,7 @@ app_server <- function(input, output, session) {
       )
 
       update_modal_progress(value = 0.95, text = "Finalising results...")
-      mean_interaction_scores <- AverageExpression(
-        seurat_with_scores,
-        assays = "MATRISOMEPAIR",
-        group.by = grouping_var
-      )[[1]]
+      mean_interaction_scores <- mean_matrisome_pair_scores(seurat_with_scores, "MATRISOMEPAIR", grouping_var)
 
       interaction_results <- list(
         stats = interaction_stats,
@@ -2876,476 +2881,167 @@ app_server <- function(input, output, session) {
   # --- [ EXPORT ALL (ZIP) ] ---
   matrisome_coexpression_stats_filename <- "matrisome_coexpression_stats.csv"
   matrisome_coexpression_means_filename <- "matrisome_coexpression_means.csv"
-  matrisome_coexpression_heatmap_name <- "30_matrisome_coexpression_heatmap"
-  matrisome_coexpression_volcano_prefix <- "31_matrisome_coexpression_volcano_"
 
-  output$export_all <- downloadHandler(
-    filename = function() {
-      paste0("MatriSpace_Export_", gsub(" ", "_", nm()), "_", Sys.Date(), ".zip")
-    },
-    content = function(file) {
-      # --- MASTER ERROR HANDLER ---
-      tryCatch({
+  export_object <- function() {
+    if (isTRUE(rv$matrisome_analysis_done) && !is.null(rv$matrisome_results$seurat_object)) {
+      rv$matrisome_results$seurat_object
+    } else d0()
+  }
 
-        withProgress(message = 'Preparing Export Package', value = 0, {
+  # Everything the export needs, frozen when Prepare is clicked so later input
+  # changes cannot alter the archive or its filename.
+  capture_export_snapshot <- function() {
+    a <- rv$analysis_results
+    feature <- if (isTRUE(rv$feature_analysis_done) && !is.null(a)) c(a, list(
+      selected = as.character(selectedCellTypes()),
+      stale = !identical(a$annotation_col, ann()),
+      contrast = list(
+        primary = if (identical(rv$primary_contrast_state, "contrast")) a$custom_contrast_scores$customlist1,
+        secondary = if (identical(rv$secondary_contrast_state, "contrast")) a$custom_contrast_scores$customlist2
+      ),
+      violin = input$violin_plot, independent_y = input$independent_y,
+      coex = list(palette = input$coex_palette, alpha = input$coex_alpha, pt_size = input$coex_pt_size)
+    ))
+    matrisome <- if (isTRUE(rv$matrisome_analysis_done)) list(
+      results = rv$matrisome_results, annotation_col = ann(),
+      niche_means = tryCatch(signature_distribution_data(), error = function(e) NULL)
+    )
+    view <- function(prefix) list(opacity = input[[paste0("spot_opacity_", prefix)]],
+                                  size = input[[paste0("spot_size_", prefix)]],
+                                  borders = input[[paste0("spot_borders_", prefix)]])
+    list(
+      sample = nm(), time = Sys.time(),
+      preset = if (identical(input$export_preset, "current")) "current" else "publication",
+      obj = export_object(), annotation_col = ann(), annotation = setNames(cleaned_annotation(), colnames(d0())), colours = color_map(),
+      feature = feature, matrisome = matrisome, pairs = rv$matrisome_pair_results,
+      views = list(main = view("main"), ecm = view("ecm"),
+                   pt = list(main = input$main_pt_size, subcategories = input$subcategories_pt_size,
+                             families = input$families_pt_size, ecm = input$ecm_pt_size))
+    )
+  }
 
-          # 1. Setup temporary directory structure
-          incProgress(0.1, detail = "Setting up directories...")
-          temp_dir <- file.path(tempdir(), "matrispace_export")
-          if (dir.exists(temp_dir)) unlink(temp_dir, recursive = TRUE)
-          dir.create(temp_dir)
+  write_export_figures <- function(snap, root, mode, data_lines = character(0)) {
+    style <- export_style(snap$preset)
+    dirs <- if (mode == "all") {
+      list(pdf = "Plots/PDF_for_Publication", png = "Plots/PNG_for_Viewing",
+           svg = "Plots/SVG_for_Editing", components = "Plots/SVG_for_Editing/Components")
+    } else list(pdf = "PDF", png = "PNG", svg = "SVG", components = "SVG/Components")
+    abs_dirs <- lapply(dirs, function(d) file.path(root, d))
+    for (d in abs_dirs) dir.create(d, recursive = TRUE, showWarnings = FALSE)
 
-          dir_plots_png <- file.path(temp_dir, "Plots", "PNG_for_Viewing")
-          dir_plots_pdf <- file.path(temp_dir, "Plots", "PDF_for_Publication")
-          dir_data <- file.path(temp_dir, "Data")
-          dir.create(dir_plots_png, recursive = TRUE)
-          dir.create(dir_plots_pdf, recursive = TRUE)
-          dir.create(dir_data)
+    registry <- build_export_plot_registry(snap, style)
+    rows <- do.call(rbind, lapply(registry$entries, function(e) {
+      incProgress(0.7 / length(registry$entries), detail = "Preparing figures...")
+      write_export_plot(e, abs_dirs, mode, style)
+    }))
+    if (!any(rows$status == "success")) {
+      stop("No plots could be exported: ", paste(unique(rows$reason[rows$reason != ""]), collapse = "; "))
+    }
+    write_export_manifest(rows, snap, style, registry$ctx, root, data_lines, dirs)
+    list(has_errors = any(rows$status == "error"))
+  }
 
-          # --- ROBUSTLY GET THE FINAL SEURAT OBJECT ---
-          # Use matrisome results object if available (has all scores), otherwise use d0()
-          seurat_obj_for_export <- NULL
-          if (isTRUE(rv$matrisome_analysis_done) && !is.null(rv$matrisome_results$seurat_object)) {
-            seurat_obj_for_export <- rv$matrisome_results$seurat_object
-          } else {
-            seurat_obj_for_export <- d0()
-          }
-          if (is.null(seurat_obj_for_export)) {
-              stop("Could not find a valid Seurat object to export.")
-          }
+  build_export_all <- function(file, snap) {
+    withProgress(message = 'Preparing Export Package', value = 0, {
+      temp_dir <- tempfile("matrispace_export_")
+      dir_data <- file.path(temp_dir, "Data")
+      dir.create(dir_data, recursive = TRUE)
+      on.exit(unlink(temp_dir, recursive = TRUE), add = TRUE)
 
-          # --- 2. EXPORT DATA ---
-          incProgress(0.1, detail = "Exporting data tables...")
+      seurat_obj_for_export <- snap$obj
+      if (is.null(seurat_obj_for_export)) stop("Could not find a valid Seurat object to export.")
 
-          # FEATURE DATA EXPORT - Only if feature analysis was done
-          if (!is.null(rv$analysis_results)) {
-            tryCatch({
-              df_main <- rv$analysis_results$data[, c("imagerow", "imagecol", ann(), "feature1", "feature2")]
-              colnames(df_main) <- c("ImageRow", "ImageCol", "Annotation", "Primary_Feature", "Secondary_Feature")
-              write.csv(df_main, file.path(dir_data, "main_feature_data.csv"))
-            }, error = function(e){ warning("Failed to export main_feature_data.csv") })
+      incProgress(0.05, detail = "Exporting data tables...")
+      a <- snap$feature
+      if (!is.null(a)) {
+        df_main <- a$data[, c("imagerow", "imagecol", a$annotation_col, "feature1", "feature2")]
+        colnames(df_main) <- c("ImageRow", "ImageCol", "Annotation", "Primary_Feature", "Secondary_Feature")
+        write.csv(df_main, file.path(dir_data, "main_feature_data.csv"))
 
-            if (length(rv$analysis_results$custom_gene_sets) > 0) {
-              tryCatch({
-                assay_name <- if (is.null(rv$analysis_results$custom_score_assay)) "" else rv$analysis_results$custom_score_assay
-                layer_name <- if (is.null(rv$analysis_results$custom_score_layer)) "" else rv$analysis_results$custom_score_layer
-                custom_rows <- lapply(names(rv$analysis_results$custom_gene_sets), function(id) {
-                  display_mode <- if (
-                    (id == "customlist1" && identical(rv$primary_contrast_state, "contrast")) ||
-                    (id == "customlist2" && identical(rv$secondary_contrast_state, "contrast"))
-                  ) "relative_contrast" else "standard_ucell"
-                  data.frame(
-                    internal_id = id,
-                    feature_role = if (id == "customlist1") "primary" else "secondary",
-                    gene = rv$analysis_results$custom_gene_sets[[id]],
-                    assay = assay_name,
-                    layer = layer_name,
-                    scoring_method = "UCell",
-                    display_mode = display_mode,
-                    stringsAsFactors = FALSE
-                  )
-                })
-                write.csv(do.call(rbind, custom_rows), file.path(dir_data, "custom_gene_sets.csv"), row.names = FALSE)
-              }, error = function(e){ warning("Failed to export custom_gene_sets.csv") })
-            }
-
-            tryCatch({
-              stats_list <- list()
-              f_stats <- feature_autocorrelation_stats()
-              if(!is.null(f_stats$primary)) stats_list[['Primary_Morans_I']] <- f_stats$primary$morans_I
-              if(!is.null(f_stats$primary)) stats_list[['Primary_Morans_p_value']] <- f_stats$primary$p_value
-              if(!is.null(f_stats$secondary)) stats_list[['Secondary_Morans_I']] <- f_stats$secondary$morans_I
-              if(!is.null(f_stats$secondary)) stats_list[['Secondary_Morans_p_value']] <- f_stats$secondary$p_value
-
-              c_stats <- crosscorrelation_stats()
-              if(!is.null(c_stats$pearson)) stats_list[['Pearson_Correlation_r']] <- c_stats$pearson$cor
-              if(!is.null(c_stats$pearson)) stats_list[['Pearson_Correlation_p_value']] <- c_stats$pearson$pval
-              if(!is.null(c_stats$spatial)) stats_list[['Spatial_Cross_Correlation']] <- c_stats$spatial$cor
-
-              df_stats <- data.frame(Metric = names(stats_list), Value = unlist(stats_list))
-              write.csv(df_stats, file.path(dir_data, "spatial_statistics_summary.csv"), row.names = FALSE)
-            }, error = function(e){ warning("Failed to export spatial_statistics_summary.csv") })
-          }
-
-          # MATRISOME DATA EXPORT - Only if matrisome analysis was done
-          if (isTRUE(rv$matrisome_analysis_done)) {
-            tryCatch({
-              score_cols <- grep("_score|_UCell", colnames(seurat_obj_for_export@meta.data), value = TRUE)
-              df_scores <- seurat_obj_for_export@meta.data[, score_cols, drop = FALSE]
-              write.csv(df_scores, file.path(dir_data, "matrisome_scores.csv"))
-            }, error = function(e){ warning("Failed to export matrisome_scores.csv") })
-          }
-
-          # Matrisome-pair co-expression data export
-          if (!is.null(rv$matrisome_pair_results)) {
-            tryCatch({
-              write.csv(rv$matrisome_pair_results$stats, file.path(dir_data, matrisome_coexpression_stats_filename), row.names = FALSE)
-              write.csv(rv$matrisome_pair_results$means, file.path(dir_data, matrisome_coexpression_means_filename))
-            }, error = function(e){ warning("Failed to export matrisome-pair co-expression data") })
-          }
-
-          # FULL METADATA EXPORT - Always export
-          tryCatch({
-            write.csv(seurat_obj_for_export@meta.data, file.path(dir_data, "spot_metadata.csv"))
-          }, error = function(e){ warning("Failed to export spot_metadata.csv") })
-
-          # --- 3. EXPORT PLOTS ---
-          save_plot <- function(plot_obj, name, width = 7, height = 6) {
-            ggsave(file.path(dir_plots_png, paste0(name, ".png")), plot = plot_obj, width = width, height = height, dpi = 300)
-            ggsave(file.path(dir_plots_pdf, paste0(name, ".pdf")), plot = plot_obj, width = width, height = height)
-          }
-
-          # Base Tissue Image with Scale Bar
-          incProgress(0.1, detail = "Exporting Base Tissue Image...")
-          tryCatch({
-            p_tissue_base <- SpatialDimPlot(seurat_obj_for_export, label = FALSE, alpha = 0.0, crop = FALSE) + NoLegend()
-            p_tissue_with_bar <- add_scale_bar(p_tissue_base, seurat_obj_for_export)
-            save_plot(p_tissue_with_bar, "00_tissue_image_with_scale_bar")
-          }, error = function(e){ warning("Failed to export Base Tissue Image") })
-
-          # Annotation Plot
-          incProgress(0.1, detail = "Exporting Annotation plot...")
-          tryCatch({
-            # Build annotation data from Seurat object
-            coords <- GetTissueCoordinates(seurat_obj_for_export)
-            annot_col <- ann()
-            coords$annotation <- seurat_obj_for_export@meta.data[[annot_col]]
-
-            p_annot <- ggplot(coords, aes(x = imagecol, y = imagerow, colour = annotation)) +
-              geom_point(size = 1.5) + scale_color_manual(values = color_map()) +
-              coord_fixed() + theme_void() + scale_y_reverse() + labs(colour = "Annotation")
-
-            p_annot_with_bar <- add_scale_bar(p_annot, seurat_obj_for_export)
-            save_plot(p_annot_with_bar, "01_annotation_plot_with_scale_bar")
-
-          }, error = function(e){ warning("Failed to export Annotation Plot") })
-
-          # Feature Plots - Only if feature analysis was done
-          if (!is.null(rv$analysis_results)) {
-            incProgress(0.1, detail = "Exporting Feature plots...")
-            tryCatch({
-              plot_data <- rv$analysis_results$data
-              pal <- rev(RColorBrewer::brewer.pal(11, "RdYlBu"))
-              primary_relative <- identical(rv$primary_contrast_state, "contrast") &&
-                !is.null(rv$analysis_results$custom_contrast_scores$customlist1)
-              plot_data$.feature1_display <- if (primary_relative) {
-                rv$analysis_results$custom_contrast_scores$customlist1[rownames(plot_data)]
-              } else plot_data$feature1
-              p_feat1 <- ggplot(plot_data, aes(x = imagecol, y = imagerow, colour = .feature1_display)) +
-                geom_point(size = 1.5) + scale_colour_gradientn(colours = pal, limits = if (primary_relative) c(0, 1) else NULL) +
-                coord_fixed() + theme_void() + scale_y_reverse() +
-                labs(colour = if (primary_relative) "UCell relative contrast" else rv$analysis_results$gene1)
-              save_plot(p_feat1, "02_primary_feature")
-
-              if (rv$analysis_results$sel2 != "none") {
-                secondary_relative <- identical(rv$secondary_contrast_state, "contrast") &&
-                  !is.null(rv$analysis_results$custom_contrast_scores$customlist2)
-                plot_data$.feature2_display <- if (secondary_relative) {
-                  rv$analysis_results$custom_contrast_scores$customlist2[rownames(plot_data)]
-                } else plot_data$feature2
-                p_feat2 <- ggplot(plot_data, aes(x = imagecol, y = imagerow, colour = .feature2_display)) +
-                  geom_point(size = 1.5) + scale_colour_gradientn(colours = pal, limits = if (secondary_relative) c(0, 1) else NULL) +
-                  coord_fixed() + theme_void() + scale_y_reverse() +
-                  labs(colour = if (secondary_relative) "UCell relative contrast" else rv$analysis_results$gene2)
-                save_plot(p_feat2, "03_secondary_feature")
-              }
-            }, error = function(e){ warning("Failed to export Feature Plots") })
-
-            # Co-expression Plot
-            incProgress(0.1, detail = "Exporting Co-expression plot...")
-            tryCatch({
-              if (rv$analysis_results$sel2 != "none") {
-                temp_seurat_obj <- d0()
-                cell_order <- intersect(Cells(temp_seurat_obj), rownames(rv$analysis_results$data))
-                if (length(cell_order) > 0) {
-                  temp_seurat_obj <- temp_seurat_obj[, cell_order]
-                  temp_seurat_obj$feature_blend_1 <- rv$analysis_results$data[cell_order, "feature1"]
-                  temp_seurat_obj$feature_blend_2 <- rv$analysis_results$data[cell_order, "feature2"]
-                  colors_to_use <- coex_blend_colors(input$coex_palette)
-                  full_plot_object <- SpatialFeaturePlotBlend(
-                    object = temp_seurat_obj,
-                    features = c("feature_blend_1", "feature_blend_2"),
-                    feature_1_alt_name = rv$analysis_results$gene1,
-                    feature_2_alt_name = rv$analysis_results$gene2,
-                    combine = TRUE,
-                    bottom_left = colors_to_use$bottom_left,
-                    bottom_right = colors_to_use$bottom_right,
-                    top_left = colors_to_use$top_left,
-                    top_right = colors_to_use$top_right,
-                    sfp_extra_arguments = list(pt.size.factor = effective_pt_size(input$coex_pt_size), alpha = input$coex_alpha)
-                  )
-                  inner_plots <- full_plot_object$patches$plots[[1]]$patches$plots
-                  blended_plot <- inner_plots[[3]] + theme(plot.title = element_blank())
-                  legend_plot <- inner_plots[[4]]
-                  final_coex_plot <- wrap_plots(blended_plot, legend_plot, nrow = 1, widths = c(0.75, 0.25))
-                  save_plot(final_coex_plot, "04_co_expression", width = 10, height = 7)
-                }
-              }
-            }, error = function(e){ warning("Failed to export Co-expression Plot") })
-
-            tryCatch({
-              if (rv$analysis_results$sel2 != "none") {
-                p_lisa <- plot_lisa_clustering(
-                  k = rv$analysis_results$data,
-                  selectedCellTypes = unique(rv$analysis_results$data[[ann()]]),
-                  ann_col = ann(),
-                  f1_name = rv$analysis_results$gene1,
-                  f2_name = rv$analysis_results$gene2
-                )
-                save_plot(p_lisa, "05_lisa_clustering", width = 12, height = 6)
-              }
-            }, error = function(e){ warning("Failed to export LISA Plot") })
-          }
-
-          # Matrisome & ECM Plots - Only if matrisome analysis was done
-          if (isTRUE(rv$matrisome_analysis_done)) {
-            incProgress(0.3, detail = "Exporting Matrisome & ECM plots...")
-            tryCatch({
-              main_divisions <- c("glycoprotein", "collagen", "proteoglycan", "regulator", "secreted_factor", "affliated_protein")
-              for (group in main_divisions) {
-                if (!is.null(rv$matrisome_results[[group]])) {
-                  p_dist <- SpatialFeaturePlot(seurat_obj_for_export, features = paste0(group, "_robust_score"), pt.size.factor = effective_pt_size(input$main_pt_size)) + theme(legend.position = "right")
-                  p_hot <- SpatialFeaturePlot(seurat_obj_for_export, features = paste0(group, "_log_scaled_score"), pt.size.factor = effective_pt_size(input$main_pt_size)) + theme(legend.position = "right")
-                  save_plot(p_dist, paste0("10_matrisome_", group, "_distribution"))
-                  save_plot(p_hot, paste0("11_matrisome_", group, "_hotspot"))
-                }
-              }
-
-              if ("ecm_domain_annotation" %in% colnames(seurat_obj_for_export@meta.data)) {
-                p_ecm_domain <- SpatialDimPlot(seurat_obj_for_export, group.by = "ecm_domain_annotation", pt.size.factor = effective_pt_size(input$ecm_domain_pt_size))
-                save_plot(p_ecm_domain, "20_ecm_domain_annotation")
-              }
-
-              ecm_sigs <- c("Interstitial", "Basement")
-              for(sig in ecm_sigs) {
-                p_sig <- SpatialFeaturePlot(seurat_obj_for_export, features = paste0(sig, "_UCell"), pt.size.factor = effective_pt_size(input$ecm_pt_size))
-                save_plot(p_sig, paste0("21_ecm_niche_score_", tolower(sig)))
-              }
-
-              ecm_subcategories <- c("perivascular", "hemostasis", "elastic_fibers", "gf_binding")
-              for (subcat in ecm_subcategories) {
-                if (paste0(subcat, "_robust_score") %in% colnames(seurat_obj_for_export@meta.data)) {
-                  p_dist <- SpatialFeaturePlot(seurat_obj_for_export,
-                                               features = paste0(subcat, "_robust_score"),
-                                               pt.size.factor = effective_pt_size(input$subcategories_pt_size)) +
-                    theme(legend.position = "right")
-                  p_hot <- SpatialFeaturePlot(seurat_obj_for_export,
-                                              features = paste0(subcat, "_log_scaled_score"),
-                                              pt.size.factor = effective_pt_size(input$subcategories_pt_size)) +
-                    theme(legend.position = "right")
-                  save_plot(p_dist, paste0("12_matrisome_subcategory_", subcat, "_distribution"))
-                  save_plot(p_hot, paste0("13_matrisome_subcategory_", subcat, "_hotspot"))
-                }
-              }
-
-              ecm_gene_families <- c("laminin", "matricellular", "syndecan", "glypican")
-              for (family in ecm_gene_families) {
-                if (paste0(family, "_robust_score") %in% colnames(seurat_obj_for_export@meta.data)) {
-                  p_dist <- SpatialFeaturePlot(seurat_obj_for_export,
-                                               features = paste0(family, "_robust_score"),
-                                               pt.size.factor = effective_pt_size(input$families_pt_size)) +
-                    theme(legend.position = "right")
-                  p_hot <- SpatialFeaturePlot(seurat_obj_for_export,
-                                              features = paste0(family, "_log_scaled_score"),
-                                              pt.size.factor = effective_pt_size(input$families_pt_size)) +
-                    theme(legend.position = "right")
-                  save_plot(p_dist, paste0("14_matrisome_gene_family_", family, "_distribution"))
-                  save_plot(p_hot, paste0("15_matrisome_gene_family_", family, "_hotspot"))
-                }
-              }
-
-              tryCatch({
-                sig_data <- signature_distribution_data()
-                if (!is.null(sig_data) && nrow(sig_data) > 0) {
-                  p_niche_dist <- ggplot(sig_data, aes(x = annotation_group, y = mean_score, fill = signature_name)) +
-                    geom_bar(stat = "identity", position = position_dodge(width = 0.9)) +
-                    scale_fill_manual(values = c("Basement membrane" = "#6a3d9aff",
-                                                 "Interstitial ECM" = "#2b9e2bff")) +
-                    labs(x = NULL, y = "Average Niche Score", fill = NULL) +
-                    theme_minimal(base_size = 14) +
-                    theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1),
-                          legend.position = "top")
-                  save_plot(p_niche_dist, "22_niche_distribution", width = 10, height = 6)
-                }
-              }, error = function(e) warning("Failed to export niche distribution plot"))
-            }, error = function(e){ warning("Failed to export Matrisome/ECM Plots") })
-          }
-
-          # Matrisome-pair co-expression plots
-          if (!is.null(rv$matrisome_pair_results)) {
-            incProgress(0.1, detail = "Exporting matrisome-pair co-expression plots...")
-            tryCatch({
-              stats_data <- rv$matrisome_pair_results$stats
-              means_data <- rv$matrisome_pair_results$means
-
-              # Matrisome-pair heatmap
-              top_axes <- stats_data %>%
-                filter(!grepl("not.assigned|not_assigned", cluster, ignore.case = TRUE)) %>%
-                filter(perc_difference > 0.05 & avg_log2FC > 0.5) %>%
-                group_by(cluster) %>%
-                slice_max(order_by = avg_log2FC, n = 10)
-
-              if (nrow(top_axes) > 0) {
-                matrix_to_plot <- means_data[unique(top_axes$feature), , drop = FALSE]
-                cols_to_keep <- !grepl("not.assigned|not_assigned", colnames(matrix_to_plot), ignore.case = TRUE)
-                matrix_to_plot_filtered <- matrix_to_plot[, cols_to_keep, drop = FALSE]
-                clean_colnames <- gsub("_", " ", colnames(matrix_to_plot_filtered))
-
-                # Save heatmap
-                png(file.path(dir_plots_png, paste0(matrisome_coexpression_heatmap_name, ".png")), width = 10, height = 8, units = "in", res = 300)
-                pheatmap(matrix_to_plot_filtered, labels_col = clean_colnames, scale = "row",
-                         fontsize_row = 8, fontsize_col = 10, border_color = "grey60",
-                         cluster_rows = TRUE, cluster_cols = TRUE, angle_col = 45,
-                         cellwidth = 30, cellheight = 10)
-                dev.off()
-
-                pdf(file.path(dir_plots_pdf, paste0(matrisome_coexpression_heatmap_name, ".pdf")), width = 10, height = 8)
-                pheatmap(matrix_to_plot_filtered, labels_col = clean_colnames, scale = "row",
-                         fontsize_row = 8, fontsize_col = 10, border_color = "grey60",
-                         cluster_rows = TRUE, cluster_cols = TRUE, angle_col = 45,
-                         cellwidth = 30, cellheight = 10)
-                dev.off()
-              }
-
-              # Matrisome-pair volcano plots for each niche
-              niches <- unique(stats_data$cluster)
-              niches <- niches[!grepl("not.assigned|not_assigned", niches, ignore.case = TRUE)]
-
-              for (niche in niches) {
-                stats_subset <- stats_data %>% filter(cluster == niche)
-                if (nrow(stats_subset) == 0) next
-
-                top_hits <- stats_subset %>%
-                  filter(avg_log2FC > 0.5 & perc_difference > 0.05) %>%
-                  slice_max(order_by = avg_log2FC, n = 20)
-
-                niche_clean <- trimws(gsub("\\s+", " ", gsub("_+", " ", niche)))
-
-                y_extreme <- max(abs(quantile(stats_subset$avg_log2FC, c(0.01, 0.99), na.rm = TRUE)))
-                y_limit <- min(y_extreme * 1.1, 10)
-                y_limits <- c(-y_limit, y_limit)
-
-                p_volcano <- ggplot(stats_subset, aes(x = perc_difference, y = avg_log2FC)) +
-                  geom_point(color = "grey", alpha = 0.5, size = 0.6) +
-                  geom_point(data = top_hits, color = "red", alpha = 0.8, size = 1.2) +
-                  geom_label_repel(data = top_hits, aes(label = feature),
-                                  size = 2.5, max.overlaps = Inf, box.padding = 0.6,
-                                  force = 3, force_pull = 0.5, min.segment.length = 0,
-                                  fill = "white", label.size = 0.1) +
-                  geom_hline(yintercept = 0.5, linetype = "dashed") +
-                  geom_vline(xintercept = 0.05, linetype = "dashed") +
-                  theme_bw(base_size = 14) +
-                  labs(title = paste("Matrisome Pair Enrichment in the", niche_clean, "Niche"),
-                       x = "% Difference (In vs Out)", y = "Avg Log2 FC") +
-                  coord_cartesian(ylim = y_limits)
-
-                save_plot(p_volcano, paste0(matrisome_coexpression_volcano_prefix, gsub(" ", "_", niche)), width = 8, height = 6)
-              }
-            }, error = function(e){ warning("Failed to export matrisome-pair co-expression plots") })
-          }
-
-          # --- EXPORT SEURAT OBJECT ---
-          incProgress(0.1, detail = "Exporting Seurat object...")
-          tryCatch({
-            seurat_filename <- paste0(gsub(" ", "_", nm()), "_MatriSpace.rds")
-            saveRDS(seurat_obj_for_export, file.path(dir_data, seurat_filename))
-          }, error = function(e){ warning("Failed to export Seurat object") })
-
-          # --- 4. CREATE README ---
-          incProgress(0.1, detail = "Finalizing package...")
-          seurat_filename <- paste0(gsub(" ", "_", nm()), "_MatriSpace.rds")
-          seurat_export_path <- file.path(dir_data, seurat_filename)
-          data_readme_lines <- c(
-            "- Data/: Contains the raw data tables generated by the analysis."
-          )
-          if (file.exists(file.path(dir_data, "spot_metadata.csv"))) {
-            data_readme_lines <- c(
-              data_readme_lines,
-              "  - spot_metadata.csv: Complete metadata for each spot (coordinates, annotations, scores)."
+        if (length(a$custom_gene_sets) > 0) {
+          custom_rows <- lapply(names(a$custom_gene_sets), function(id) {
+            role <- if (id == "customlist1") "primary" else "secondary"
+            data.frame(
+              internal_id = id,
+              feature_role = role,
+              gene = a$custom_gene_sets[[id]],
+              assay = if (is.null(a$custom_score_assay)) "" else a$custom_score_assay,
+              layer = if (is.null(a$custom_score_layer)) "" else a$custom_score_layer,
+              scoring_method = "UCell",
+              display_mode = if (!is.null(a$contrast[[role]])) "relative_contrast" else "standard_ucell",
+              stringsAsFactors = FALSE
             )
-          }
-          if (!is.null(rv$analysis_results) && file.exists(file.path(dir_data, "main_feature_data.csv"))) {
-            data_readme_lines <- c(
-              data_readme_lines,
-              "  - main_feature_data.csv: Expression values for the selected features for each spot."
-            )
-          }
-          if (file.exists(file.path(dir_data, "custom_gene_sets.csv"))) {
-            data_readme_lines <- c(
-              data_readme_lines,
-              "  - custom_gene_sets.csv: Matrisome genes selected for custom primary or secondary feature scores."
-            )
-          }
-          if (isTRUE(rv$matrisome_analysis_done) && file.exists(file.path(dir_data, "matrisome_scores.csv"))) {
-            data_readme_lines <- c(
-              data_readme_lines,
-              "  - matrisome_scores.csv: All calculated matrisome gene list scores for each spot."
-            )
-          }
-          if (!is.null(rv$analysis_results) && file.exists(file.path(dir_data, "spatial_statistics_summary.csv"))) {
-            data_readme_lines <- c(
-              data_readme_lines,
-              "  - spatial_statistics_summary.csv: A summary of all calculated correlation statistics."
-            )
-          }
-          if (!is.null(rv$matrisome_pair_results) && file.exists(file.path(dir_data, matrisome_coexpression_stats_filename))) {
-            data_readme_lines <- c(
-              data_readme_lines,
-              paste0("  - ", matrisome_coexpression_stats_filename, ": Matrisome-pair co-expression enrichment statistics per niche.")
-            )
-          }
-          if (!is.null(rv$matrisome_pair_results) && file.exists(file.path(dir_data, matrisome_coexpression_means_filename))) {
-            data_readme_lines <- c(
-              data_readme_lines,
-              paste0("  - ", matrisome_coexpression_means_filename, ": Mean co-expression scores for each matrisome pair per niche.")
-            )
-          }
-          if (file.exists(seurat_export_path)) {
-            data_readme_lines <- c(
-              data_readme_lines,
-              paste0("  - ", seurat_filename, ": Complete Seurat object with all analysis results.")
-            )
-          }
-          readme_text <- c(
-            "MatriSpace Analysis Export",
-            "==========================",
-            paste("Sample Name:", nm()),
-            paste("Export Date:", Sys.Date()),
-            "",
-            "This ZIP file contains the following directories:",
-            "- Plots/: Contains all generated plots in two formats.",
-            "  - PNG_for_Viewing/: High-resolution PNGs for presentations and quick viewing.",
-            "  - PDF_for_Publication/: Vector-based PDFs for publication and editing.",
-            data_readme_lines
-          )
-          writeLines(readme_text, file.path(temp_dir, "README.txt"))
+          })
+          write.csv(do.call(rbind, custom_rows), file.path(dir_data, "custom_gene_sets.csv"), row.names = FALSE)
+        }
 
-          # --- 5. ZIP AND SERVE (ROBUST METHOD) ---
-          # This pattern avoids Windows file locking issues by changing the
-          # working directory before creating the archive.
+        stats_list <- list()
+        f_stats <- feature_autocorrelation_stats()
+        if (!is.null(f_stats$primary)) stats_list[['Primary_Morans_I']] <- f_stats$primary$morans_I
+        if (!is.null(f_stats$primary)) stats_list[['Primary_Morans_p_value']] <- f_stats$primary$p_value
+        if (!is.null(f_stats$secondary)) stats_list[['Secondary_Morans_I']] <- f_stats$secondary$morans_I
+        if (!is.null(f_stats$secondary)) stats_list[['Secondary_Morans_p_value']] <- f_stats$secondary$p_value
+        c_stats <- crosscorrelation_stats()
+        if (!is.null(c_stats$pearson)) stats_list[['Pearson_Correlation_r']] <- c_stats$pearson$cor
+        if (!is.null(c_stats$pearson)) stats_list[['Pearson_Correlation_p_value']] <- c_stats$pearson$pval
+        if (!is.null(c_stats$spatial)) stats_list[['Spatial_Cross_Correlation']] <- c_stats$spatial$cor
+        df_stats <- data.frame(Metric = names(stats_list), Value = unlist(stats_list))
+        write.csv(df_stats, file.path(dir_data, "spatial_statistics_summary.csv"), row.names = FALSE)
+      }
 
-          # Save the current working directory
-          old_wd <- getwd()
-          # Change to the temporary directory
-          setwd(temp_dir)
-          # Get a list of all files with relative paths (e.g., "Data/file.csv")
-          files_to_zip <- list.files(".", recursive = TRUE)
-          # Create the zip archive. 'file' is the full path to the destination
-          zip::zip(zipfile = file, files = files_to_zip)
-          # Restore the original working directory
-          setwd(old_wd)
-        })
-      }, error = function(e) {
-        # This code runs if any part of the tryCatch fails
-        showNotification(
-          paste("Export failed:", e$message),
-          type = "error",
-          duration = 10
+      if (!is.null(snap$matrisome)) {
+        score_cols <- grep("_score|_UCell", colnames(seurat_obj_for_export@meta.data), value = TRUE)
+        if (length(score_cols) == 0) stop("No matrisome scores were found in the analysed object.")
+        write.csv(seurat_obj_for_export@meta.data[, score_cols, drop = FALSE], file.path(dir_data, "matrisome_scores.csv"))
+
+        ecm_stats <- ecm_autocorrelation_stats()
+        autocorr <- dplyr::bind_rows(
+          snap$matrisome$results$autocorrelation,
+          lapply(names(ecm_stats), function(n) data.frame(category = paste0(export_sentence(n), "_UCell"),
+                                                          morans_I = ecm_stats[[n]]$morans_I,
+                                                          p_value = ecm_stats[[n]]$p_value))
         )
-      })
-    },
-    contentType = "application/zip"
-  )
+        if (NROW(autocorr) > 0) {
+          write.csv(autocorr, file.path(dir_data, "matrisome_autocorrelation.csv"), row.names = FALSE)
+        }
+      }
+
+      if (!is.null(snap$pairs)) {
+        write.csv(snap$pairs$stats, file.path(dir_data, matrisome_coexpression_stats_filename), row.names = FALSE)
+        write.csv(snap$pairs$means, file.path(dir_data, matrisome_coexpression_means_filename))
+      }
+
+      write.csv(seurat_obj_for_export@meta.data, file.path(dir_data, "spot_metadata.csv"))
+
+      incProgress(0.05, detail = "Exporting Seurat object...")
+      seurat_filename <- paste0(gsub(" ", "_", snap$sample), "_MatriSpace.rds")
+      saveRDS(seurat_obj_for_export, file.path(dir_data, seurat_filename))
+
+      data_files <- c(
+        "spot_metadata.csv" = "Complete metadata for each spot (coordinates, annotations, scores).",
+        "main_feature_data.csv" = "Expression values for the selected features for each spot.",
+        "custom_gene_sets.csv" = "Matrisome genes selected for custom primary or secondary feature scores.",
+        "matrisome_scores.csv" = "All calculated matrisome gene list scores for each spot.",
+        "matrisome_autocorrelation.csv" = "Moran's I for each matrisome score and ECM niche score.",
+        "spatial_statistics_summary.csv" = "A summary of all calculated correlation statistics."
+      )
+      data_files[matrisome_coexpression_stats_filename] <- "Matrisome pair co-expression enrichment statistics per niche."
+      data_files[matrisome_coexpression_means_filename] <- "Mean co-expression scores for each matrisome pair per niche."
+      data_files[seurat_filename] <- "Complete Seurat object with all analysis results."
+      data_files <- data_files[file.exists(file.path(dir_data, names(data_files)))]
+      data_lines <- c("Data/: raw data tables generated by the analysis.",
+                      paste0("  - ", names(data_files), ": ", data_files))
+
+      status <- write_export_figures(snap, temp_dir, "all", data_lines)
+
+      incProgress(0.05, detail = "Creating archive...")
+      zip::zip(zipfile = file, files = list.files(temp_dir, recursive = TRUE), root = temp_dir, compression_level = 1)
+      if (!file.exists(file) || file.size(file) == 0 || nrow(zip::zip_list(file)) == 0) {
+        stop("The export archive could not be created.")
+      }
+      status
+    })
+  }
 
   # --- [ EXPORT METADATA (CSV) ] ---
   output$export_metadata <- downloadHandler(
@@ -3363,8 +3059,10 @@ app_server <- function(input, output, session) {
         }
         req(seurat_obj)
         write.csv(seurat_obj@meta.data, file)
+        if (!file.exists(file) || file.size(file) == 0) stop("The metadata file could not be created.")
       }, error = function(e) {
-        showNotification(paste("Export failed:", e$message), type = "error", duration = 10)
+        notify_problem("The metadata could not be exported. Please try again.", e, "Metadata export")
+        stop("The metadata could not be exported. Please try again.", call. = FALSE)
       })
     },
     contentType = "text/csv"
@@ -3377,304 +3075,113 @@ app_server <- function(input, output, session) {
     },
     content = function(file) {
       tryCatch({
-        req(rv$matrisome_analysis_done, rv$matrisome_results$seurat_object)
+        if (!isTRUE(rv$matrisome_analysis_done) || is.null(rv$matrisome_results$seurat_object)) {
+          stop("Run Matrisome Profile before exporting scores.")
+        }
         seurat_obj <- rv$matrisome_results$seurat_object
         score_cols <- grep("_score|_UCell", colnames(seurat_obj@meta.data), value = TRUE)
-        if (length(score_cols) == 0) {
-          showNotification("No matrisome scores found. Run Matrisome Profile first.", type = "warning")
-          return(NULL)
-        }
+        if (length(score_cols) == 0) stop("No matrisome scores were found in the analysed object.")
         df_scores <- seurat_obj@meta.data[, score_cols, drop = FALSE]
         write.csv(df_scores, file)
+        if (!file.exists(file) || file.size(file) == 0) stop("The scores file could not be created.")
       }, error = function(e) {
-        showNotification(paste("Export failed:", e$message), type = "error", duration = 10)
+        text <- if (!isTRUE(rv$matrisome_analysis_done) || is.null(rv$matrisome_results$seurat_object)) {
+          "Run Matrisome Profile before exporting scores."
+        } else "The scores could not be exported. Please rerun Matrisome Profile and try again."
+        notify_problem(text, e, "Scores export")
+        stop(text, call. = FALSE)
       })
     },
     contentType = "text/csv"
   )
 
   # --- [ EXPORT PLOTS ONLY (ZIP) ] ---
-  output$export_plots <- downloadHandler(
-    filename = function() {
-      paste0("MatriSpace_Plots_", gsub(" ", "_", nm()), "_", Sys.Date(), ".zip")
-    },
-    content = function(file) {
-      tryCatch({
-        withProgress(message = 'Exporting Plots', value = 0, {
-          # Use matrisome results object if available (has all scores), otherwise use d0()
-          seurat_obj <- NULL
-          if (isTRUE(rv$matrisome_analysis_done) && !is.null(rv$matrisome_results$seurat_object)) {
-            seurat_obj <- rv$matrisome_results$seurat_object
-          } else {
-            seurat_obj <- d0()
-          }
-          req(seurat_obj)
+  build_export_plots <- function(file, snap) {
+    withProgress(message = 'Exporting Plots', value = 0, {
+      temp_dir <- tempfile("matrispace_plots_export_")
+      dir.create(temp_dir)
+      on.exit(unlink(temp_dir, recursive = TRUE), add = TRUE)
 
-          # Setup temp directory
-          temp_dir <- file.path(tempdir(), "matrispace_plots_export")
-          if (dir.exists(temp_dir)) unlink(temp_dir, recursive = TRUE)
-          dir.create(temp_dir)
+      status <- write_export_figures(snap, temp_dir, "plots")
 
-          dir_png <- file.path(temp_dir, "PNG")
-          dir_pdf <- file.path(temp_dir, "PDF")
-          dir.create(dir_png)
-          dir.create(dir_pdf)
+      incProgress(0.1, detail = "Creating archive...")
+      zip::zip(zipfile = file, files = list.files(temp_dir, recursive = TRUE), root = temp_dir, compression_level = 1)
+      if (!file.exists(file) || file.size(file) == 0 || nrow(zip::zip_list(file)) == 0) {
+        stop("The plots archive could not be created.")
+      }
+      status
+    })
+  }
 
-          save_plot <- function(plot_obj, name, width = 7, height = 6) {
-            ggsave(file.path(dir_png, paste0(name, ".png")), plot = plot_obj, width = width, height = height, dpi = 300)
-            ggsave(file.path(dir_pdf, paste0(name, ".pdf")), plot = plot_obj, width = width, height = height)
-          }
+  session_export_dir <- tempfile("matrispace_exports_")
+  dir.create(session_export_dir)
+  session$onSessionEnded(function() unlink(session_export_dir, recursive = TRUE))
 
-          # Base tissue image
-          incProgress(0.2, detail = "Tissue image...")
-          tryCatch({
-            p_tissue <- SpatialDimPlot(seurat_obj, label = FALSE, alpha = 0.0, crop = FALSE) + NoLegend()
-            p_tissue <- add_scale_bar(p_tissue, seurat_obj)
-            save_plot(p_tissue, "00_tissue_image")
-          }, error = function(e) warning("Failed: tissue image"))
+  prepared_export_all <- reactiveVal(NULL)
+  prepared_export_plots <- reactiveVal(NULL)
 
-          # Annotation plot
-          incProgress(0.2, detail = "Annotation plot...")
-          tryCatch({
-            # Build annotation data from Seurat object
-            coords <- GetTissueCoordinates(seurat_obj)
-            annot_col <- ann()
-            coords$annotation <- seurat_obj@meta.data[[annot_col]]
+  prepare_export <- function(builder, prepared, input_id, download_id, prefix) {
+    shinyjs::disable(input_id)
+    on.exit(shinyjs::enable(input_id), add = TRUE)
 
-            p_annot <- ggplot(coords, aes(x = imagecol, y = imagerow, colour = annotation)) +
-              geom_point(size = 1.5) + scale_color_manual(values = color_map()) +
-              coord_fixed() + theme_void() + scale_y_reverse() + labs(colour = "Annotation")
-            p_annot <- add_scale_bar(p_annot, seurat_obj)
-            save_plot(p_annot, "01_annotation_plot")
-          }, error = function(e) warning("Failed: annotation plot"))
+    previous <- prepared()
+    if (!is.null(previous) && file.exists(previous$path)) unlink(previous$path)
 
-          # Feature plots (if feature analysis done)
-          if (!is.null(rv$analysis_results)) {
-            incProgress(0.2, detail = "Feature plots...")
-            tryCatch({
-              plot_data <- rv$analysis_results$data
-              pal <- rev(RColorBrewer::brewer.pal(11, "RdYlBu"))
-              primary_relative <- identical(rv$primary_contrast_state, "contrast") &&
-                !is.null(rv$analysis_results$custom_contrast_scores$customlist1)
-              plot_data$.feature1_display <- if (primary_relative) {
-                rv$analysis_results$custom_contrast_scores$customlist1[rownames(plot_data)]
-              } else plot_data$feature1
-              p_feat1 <- ggplot(plot_data, aes(x = imagecol, y = imagerow, colour = .feature1_display)) +
-                geom_point(size = 1.5) + scale_colour_gradientn(colours = pal, limits = if (primary_relative) c(0, 1) else NULL) +
-                coord_fixed() + theme_void() + scale_y_reverse() +
-                labs(colour = if (primary_relative) "UCell relative contrast" else rv$analysis_results$gene1)
-              save_plot(p_feat1, "02_primary_feature")
+    target <- tempfile(prefix, tmpdir = session_export_dir, fileext = ".zip")
+    tryCatch({
+      snap <- capture_export_snapshot()
+      if (isTRUE(snap$feature$stale)) {
+        showNotification("The annotation changed after Feature Analysis. Rerun Feature Analysis to include feature plots.",
+                         type = "warning", duration = 10)
+      }
+      status <- builder(target, snap)
+      label <- if (download_id == "export_all") "MatriSpace_Export_" else "MatriSpace_Plots_"
+      prepared(list(path = target, filename = paste0(label, gsub(" ", "_", snap$sample), "_", format(snap$time, "%Y-%m-%d"), ".zip")))
+      if (isTRUE(status$has_errors)) {
+        showNotification("Your export is ready, but some files could not be created. See the README in the ZIP for details.",
+                         type = "warning", duration = 10)
+      } else {
+        showNotification("Your export is ready.", type = "message", duration = 4)
+      }
+      session$sendCustomMessage("triggerDownload", download_id)
+    }, error = function(e) {
+      if (file.exists(target)) unlink(target)
+      prepared(NULL)
+      notify_problem("Your export could not be prepared. Please try again.", e, "Preparing export")
+    })
+  }
 
-              if (rv$analysis_results$sel2 != "none") {
-                secondary_relative <- identical(rv$secondary_contrast_state, "contrast") &&
-                  !is.null(rv$analysis_results$custom_contrast_scores$customlist2)
-                plot_data$.feature2_display <- if (secondary_relative) {
-                  rv$analysis_results$custom_contrast_scores$customlist2[rownames(plot_data)]
-                } else plot_data$feature2
-                p_feat2 <- ggplot(plot_data, aes(x = imagecol, y = imagerow, colour = .feature2_display)) +
-                  geom_point(size = 1.5) + scale_colour_gradientn(colours = pal, limits = if (secondary_relative) c(0, 1) else NULL) +
-                  coord_fixed() + theme_void() + scale_y_reverse() +
-                  labs(colour = if (secondary_relative) "UCell relative contrast" else rv$analysis_results$gene2)
-                save_plot(p_feat2, "03_secondary_feature")
+  observeEvent(input$prepare_export_all, {
+    req(isTRUE(rv$feature_analysis_done) || isTRUE(rv$matrisome_analysis_done))
+    prepare_export(build_export_all, prepared_export_all, "prepare_export_all", "export_all", "all_")
+  })
 
-                temp_seurat_obj <- seurat_obj
-                cell_order <- intersect(Cells(temp_seurat_obj), rownames(rv$analysis_results$data))
-                if (length(cell_order) > 0) {
-                  temp_seurat_obj <- temp_seurat_obj[, cell_order]
-                  temp_seurat_obj$feature_blend_1 <- rv$analysis_results$data[cell_order, "feature1"]
-                  temp_seurat_obj$feature_blend_2 <- rv$analysis_results$data[cell_order, "feature2"]
-                  colors_to_use <- coex_blend_colors(input$coex_palette)
-                  full_plot_object <- SpatialFeaturePlotBlend(
-                    object = temp_seurat_obj,
-                    features = c("feature_blend_1", "feature_blend_2"),
-                    feature_1_alt_name = rv$analysis_results$gene1,
-                    feature_2_alt_name = rv$analysis_results$gene2,
-                    combine = TRUE,
-                    bottom_left = colors_to_use$bottom_left,
-                    bottom_right = colors_to_use$bottom_right,
-                    top_left = colors_to_use$top_left,
-                    top_right = colors_to_use$top_right,
-                    sfp_extra_arguments = list(pt.size.factor = effective_pt_size(input$coex_pt_size), alpha = input$coex_alpha)
-                  )
-                  inner_plots <- full_plot_object$patches$plots[[1]]$patches$plots
-                  blended_plot <- inner_plots[[3]] + theme(plot.title = element_blank())
-                  legend_plot <- inner_plots[[4]]
-                  final_coex_plot <- wrap_plots(blended_plot, legend_plot, nrow = 1, widths = c(0.75, 0.25))
-                  save_plot(final_coex_plot, "04_co_expression", width = 10, height = 7)
-                }
+  observeEvent(input$prepare_export_plots, {
+    req(isTRUE(rv$feature_analysis_done) || isTRUE(rv$matrisome_analysis_done))
+    prepare_export(build_export_plots, prepared_export_plots, "prepare_export_plots", "export_plots", "plots_")
+  })
 
-                tryCatch({
-                  p_lisa <- plot_lisa_clustering(
-                    k = rv$analysis_results$data,
-                    selectedCellTypes = unique(rv$analysis_results$data[[ann()]]),
-                    ann_col = ann(),
-                    f1_name = rv$analysis_results$gene1,
-                    f2_name = rv$analysis_results$gene2
-                  )
-                  save_plot(p_lisa, "05_lisa_clustering", width = 12, height = 6)
-                }, error = function(e) warning("Failed to export LISA plot"))
-              }
-            }, error = function(e) warning("Failed: feature plots"))
-          }
+  serve_prepared_export <- function(prepared, file) {
+    source <- prepared()$path
+    if (is.null(source) || !file.exists(source) || file.size(source) == 0) {
+      stop("The prepared export is unavailable. Please try again.")
+    }
+    if (!file.copy(source, file, overwrite = TRUE)) stop("The prepared export could not be downloaded.")
+  }
 
-          # Matrisome plots (if matrisome analysis done)
-          if (isTRUE(rv$matrisome_analysis_done)) {
-            incProgress(0.3, detail = "Matrisome plots...")
-            tryCatch({
-              main_divisions <- c("glycoprotein", "collagen", "proteoglycan", "regulator", "secreted_factor", "affliated_protein")
-              for (group in main_divisions) {
-                if (!is.null(rv$matrisome_results[[group]])) {
-                  p_dist <- SpatialFeaturePlot(seurat_obj, features = paste0(group, "_robust_score"), pt.size.factor = effective_pt_size(input$main_pt_size)) + theme(legend.position = "right")
-                  p_hot <- SpatialFeaturePlot(seurat_obj, features = paste0(group, "_log_scaled_score"), pt.size.factor = effective_pt_size(input$main_pt_size)) + theme(legend.position = "right")
-                  save_plot(p_dist, paste0("10_matrisome_", group, "_distribution"))
-                  save_plot(p_hot, paste0("11_matrisome_", group, "_hotspot"))
-                }
-              }
-
-              if ("ecm_domain_annotation" %in% colnames(seurat_obj@meta.data)) {
-                p_ecm <- SpatialDimPlot(seurat_obj, group.by = "ecm_domain_annotation", pt.size.factor = effective_pt_size(input$ecm_domain_pt_size))
-                save_plot(p_ecm, "20_ecm_domain_annotation")
-              }
-
-              for (sig in c("Interstitial", "Basement")) {
-                p_sig <- SpatialFeaturePlot(seurat_obj, features = paste0(sig, "_UCell"), pt.size.factor = effective_pt_size(input$ecm_pt_size))
-                save_plot(p_sig, paste0("21_ecm_niche_score_", tolower(sig)))
-              }
-
-              ecm_subcategories <- c("perivascular", "hemostasis", "elastic_fibers", "gf_binding")
-              for (subcat in ecm_subcategories) {
-                if (paste0(subcat, "_robust_score") %in% colnames(seurat_obj@meta.data)) {
-                  p_dist <- SpatialFeaturePlot(seurat_obj,
-                                               features = paste0(subcat, "_robust_score"),
-                                               pt.size.factor = effective_pt_size(input$subcategories_pt_size)) +
-                    theme(legend.position = "right")
-                  p_hot <- SpatialFeaturePlot(seurat_obj,
-                                              features = paste0(subcat, "_log_scaled_score"),
-                                              pt.size.factor = effective_pt_size(input$subcategories_pt_size)) +
-                    theme(legend.position = "right")
-                  save_plot(p_dist, paste0("12_matrisome_subcategory_", subcat, "_distribution"))
-                  save_plot(p_hot, paste0("13_matrisome_subcategory_", subcat, "_hotspot"))
-                }
-              }
-
-              ecm_gene_families <- c("laminin", "matricellular", "syndecan", "glypican")
-              for (family in ecm_gene_families) {
-                if (paste0(family, "_robust_score") %in% colnames(seurat_obj@meta.data)) {
-                  p_dist <- SpatialFeaturePlot(seurat_obj,
-                                               features = paste0(family, "_robust_score"),
-                                               pt.size.factor = effective_pt_size(input$families_pt_size)) +
-                    theme(legend.position = "right")
-                  p_hot <- SpatialFeaturePlot(seurat_obj,
-                                              features = paste0(family, "_log_scaled_score"),
-                                              pt.size.factor = effective_pt_size(input$families_pt_size)) +
-                    theme(legend.position = "right")
-                  save_plot(p_dist, paste0("14_matrisome_gene_family_", family, "_distribution"))
-                  save_plot(p_hot, paste0("15_matrisome_gene_family_", family, "_hotspot"))
-                }
-              }
-
-              tryCatch({
-                sig_data <- signature_distribution_data()
-                if (!is.null(sig_data) && nrow(sig_data) > 0) {
-                  p_niche_dist <- ggplot(sig_data, aes(x = annotation_group, y = mean_score, fill = signature_name)) +
-                    geom_bar(stat = "identity", position = position_dodge(width = 0.9)) +
-                    scale_fill_manual(values = c("Basement membrane" = "#6a3d9aff",
-                                                 "Interstitial ECM" = "#2b9e2bff")) +
-                    labs(x = NULL, y = "Average Niche Score", fill = NULL) +
-                    theme_minimal(base_size = 14) +
-                    theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1),
-                          legend.position = "top")
-                  save_plot(p_niche_dist, "22_niche_distribution", width = 10, height = 6)
-                }
-              }, error = function(e) warning("Failed to export niche distribution plot"))
-            }, error = function(e) warning("Failed: matrisome plots"))
-          }
-
-          # Matrisome-pair co-expression plots
-          if (!is.null(rv$matrisome_pair_results)) {
-            incProgress(0.1, detail = "Matrisome-pair co-expression plots...")
-            tryCatch({
-              stats_data <- rv$matrisome_pair_results$stats
-              means_data <- rv$matrisome_pair_results$means
-
-              # Matrisome-pair heatmap
-              top_axes <- stats_data %>%
-                filter(!grepl("not.assigned|not_assigned", cluster, ignore.case = TRUE)) %>%
-                filter(perc_difference > 0.05 & avg_log2FC > 0.5) %>%
-                group_by(cluster) %>%
-                slice_max(order_by = avg_log2FC, n = 10)
-
-              if (nrow(top_axes) > 0) {
-                matrix_to_plot <- means_data[unique(top_axes$feature), , drop = FALSE]
-                cols_to_keep <- !grepl("not.assigned|not_assigned", colnames(matrix_to_plot), ignore.case = TRUE)
-                matrix_to_plot_filtered <- matrix_to_plot[, cols_to_keep, drop = FALSE]
-                clean_colnames <- gsub("_", " ", colnames(matrix_to_plot_filtered))
-
-                png(file.path(dir_png, paste0(matrisome_coexpression_heatmap_name, ".png")), width = 10, height = 8, units = "in", res = 300)
-                pheatmap(matrix_to_plot_filtered, labels_col = clean_colnames, scale = "row",
-                         fontsize_row = 8, fontsize_col = 10, border_color = "grey60",
-                         cluster_rows = TRUE, cluster_cols = TRUE, angle_col = 45,
-                         cellwidth = 30, cellheight = 10)
-                dev.off()
-
-                pdf(file.path(dir_pdf, paste0(matrisome_coexpression_heatmap_name, ".pdf")), width = 10, height = 8)
-                pheatmap(matrix_to_plot_filtered, labels_col = clean_colnames, scale = "row",
-                         fontsize_row = 8, fontsize_col = 10, border_color = "grey60",
-                         cluster_rows = TRUE, cluster_cols = TRUE, angle_col = 45,
-                         cellwidth = 30, cellheight = 10)
-                dev.off()
-              }
-
-              # Matrisome-pair volcano plots for each niche
-              niches <- unique(stats_data$cluster)
-              niches <- niches[!grepl("not.assigned|not_assigned", niches, ignore.case = TRUE)]
-
-              for (niche in niches) {
-                stats_subset <- stats_data %>% filter(cluster == niche)
-                if (nrow(stats_subset) == 0) next
-
-                top_hits <- stats_subset %>%
-                  filter(avg_log2FC > 0.5 & perc_difference > 0.05) %>%
-                  slice_max(order_by = avg_log2FC, n = 20)
-
-                niche_clean <- trimws(gsub("\\s+", " ", gsub("_+", " ", niche)))
-
-                y_extreme <- max(abs(quantile(stats_subset$avg_log2FC, c(0.01, 0.99), na.rm = TRUE)))
-                y_limit <- min(y_extreme * 1.1, 10)
-                y_limits <- c(-y_limit, y_limit)
-
-                p_volcano <- ggplot(stats_subset, aes(x = perc_difference, y = avg_log2FC)) +
-                  geom_point(color = "grey", alpha = 0.5, size = 0.6) +
-                  geom_point(data = top_hits, color = "red", alpha = 0.8, size = 1.2) +
-                  geom_label_repel(data = top_hits, aes(label = feature),
-                                  size = 2.5, max.overlaps = Inf, box.padding = 0.6,
-                                  force = 3, force_pull = 0.5, min.segment.length = 0,
-                                  fill = "white", label.size = 0.1) +
-                  geom_hline(yintercept = 0.5, linetype = "dashed") +
-                  geom_vline(xintercept = 0.05, linetype = "dashed") +
-                  theme_bw(base_size = 14) +
-                  labs(title = paste("Matrisome Pair Enrichment in the", niche_clean, "Niche"),
-                       x = "% Difference (In vs Out)", y = "Avg Log2 FC") +
-                  coord_cartesian(ylim = y_limits)
-
-                save_plot(p_volcano, paste0(matrisome_coexpression_volcano_prefix, gsub(" ", "_", niche)), width = 8, height = 6)
-              }
-            }, error = function(e) warning("Failed: matrisome-pair plots"))
-          }
-
-          # Create ZIP
-          incProgress(0.1, detail = "Creating archive...")
-          old_wd <- getwd()
-          setwd(temp_dir)
-          files_to_zip <- list.files(".", recursive = TRUE)
-          zip::zip(zipfile = file, files = files_to_zip)
-          setwd(old_wd)
-        })
-      }, error = function(e) {
-        showNotification(paste("Export failed:", e$message), type = "error", duration = 10)
-      })
-    },
+  output$export_all <- downloadHandler(
+    filename = function() prepared_export_all()$filename,
+    content = function(file) serve_prepared_export(prepared_export_all, file),
     contentType = "application/zip"
   )
+
+  output$export_plots <- downloadHandler(
+    filename = function() prepared_export_plots()$filename,
+    content = function(file) serve_prepared_export(prepared_export_plots, file),
+    contentType = "application/zip"
+  )
+
+  outputOptions(output, "export_all", suspendWhenHidden = FALSE)
+  outputOptions(output, "export_plots", suspendWhenHidden = FALSE)
 
 }

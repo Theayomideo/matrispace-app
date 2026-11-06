@@ -44,7 +44,7 @@ initialize_reference_data <- function() {
   # Matrisome reference (single source of truth for all matrisome data)
   matrisome <- readRDS(extdata_path("matrisome_v2.rds"))
   recs <- unique(readRDS(extdata_path("receptors.RDS"))$to)
-  mobj <- unique(matrisome$gene)
+  mobj <- setdiff(unique(matrisome$gene), c("F8", "USH2A"))
 
   # Build matrisome_feature_signatures from matrisome data frame
   # Main categories: filter by notes column
@@ -56,6 +56,8 @@ initialize_reference_data <- function() {
     secreted_factors = matrisome$gene[matrisome$notes == "Secreted Factors"],
     `ecm-affiliated_proteins` = matrisome$gene[matrisome$notes == "ECM-affiliated Proteins"]
   )
+
+  matrisome_feature_signatures <- lapply(matrisome_feature_signatures, intersect, y = mobj)
 
   # Subcategories + families: filter by ecm_subcategory column (semicolon-separated)
   .subcategory_map <- c(

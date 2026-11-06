@@ -298,3 +298,8 @@ Shiny.addCustomMessageHandler("updateSpotStyle", function(message) {
       break;
   }
 });
+
+Shiny.addCustomMessageHandler("triggerDownload", function(id) {
+  const link = document.getElementById(id);
+  if (link) link.click();
+});

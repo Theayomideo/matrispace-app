@@ -1,0 +1,3 @@
+"signature","requested_genes","corrected_unique_genes","detected_genes","coverage_fraction","missing_genes"
+"Interstitial",22,22,22,1,""
+"Basement",41,41,40,0.975609756097561,"NTN5"

@@ -7,3 +7,5 @@
 ^\.Rprofile$
 ^\.dockerignore$
 ^\.github$
+
+^analyses$

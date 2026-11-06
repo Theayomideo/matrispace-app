@@ -9,3 +9,5 @@ This directory contains analyses accompanying the MatriSpace manuscript.
 Each analysis directory contains an R Markdown notebook, its rendered Markdown output, individual figures, summary results, and an input manifest. Large source data are not stored in Git.
 
 Large inputs generated for the UCell benchmark and SHG–CosMx validation are deposited at [Zenodo (doi:10.5281/zenodo.22231956)](https://doi.org/10.5281/zenodo.22231956). Original public inputs are linked in each analysis-specific `data_manifest.csv`.
+
+Round-two additions: [maxRank sensitivity](ucell-score-benchmark/round-two), [SHG baselines and COL1A2 sensitivity](shg-cosmx-validation/round-two), and [leakage rankings](leakage-ranking). The earlier UCell/SHG notebooks require MatriSpace 0.3.0; the public package update is pending.

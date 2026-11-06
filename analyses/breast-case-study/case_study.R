@@ -291,7 +291,7 @@ ll3 <- ll3[ll3$p.adj<0.05,]
 k <- seu@assays$Spatial$data[rownames(seu@assays$Spatial$data)%in%tf,]
 k <- k[,colnames(k)%in%nm]
 ex1 <- data.frame(v=k[rownames(k)%in%"MYCN"],a=ann$v)
-ex2 <- data.frame(v=k[rownames(k)%in%"IKZF1"],a=ann$v)
+ex2 <- data.frame(v=k[rownames(k)%in%"TWIST1"],a=ann$v)
 
 ggplot(ex1, aes(x = v, fill = a, color = a)) +
   geom_density(alpha = 0.3, size = 1) +
